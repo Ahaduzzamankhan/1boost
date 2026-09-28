@@ -14,6 +14,10 @@
     "directories": {
       "output": "release/${version}"
     },
+    "asarUnpack": [
+      "node_modules/koffi/**"
+    ],
+    "npmRebuild": false,
     "files": [
       "dist/**/*",
       "dist-electron/**/*",
@@ -65,18 +69,18 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "electron": "^37.0.0",
-    "koffi": "^3.3.2",
-    "lucide-react": "^0.525.0",
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "koffi": "^3.3.2"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
+    "electron": "^37.0.0",
     "electron-builder": "^25.1.0",
     "esbuild": "^0.25.0",
+    "lucide-react": "^0.525.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
     "typescript": "^5.6.0",
     "vitest": "^3.0.0"
   }
