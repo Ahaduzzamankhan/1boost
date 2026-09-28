@@ -1,0 +1,210 @@
+import { ReactNode, useEffect, useState } from 'react'
+import {
+  AppWindow,
+  AlertCircle,
+  Check,
+  Info,
+  Loader2,
+  X,
+  Zap,
+} from 'lucide-react'
+
+export function LoadingScreen({ label }: { label?: string }) {
+  return (
+    <div className="loading-screen" role="status">
+      <div className="loading-inner">
+        <div className="loading-logo">
+          <Zap size={26} strokeWidth={2.2} />
+        </div>
+        <div className="loading-title">1Boost</div>
+        <div className="loading-sub">{label ?? 'Initializing usage tracking…'}</div>
+        <div className="loading-bar">
+          <div />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export function EmptyState({
+  icon,
+  title,
+  desc,
+  action,
+}: {
+  icon: ReactNode
+  title: string
+  desc: string
+  action?: ReactNode
+}) {
+  return (
+    <div className="empty-state">
+      <div className="empty-icon">{icon}</div>
+      <div className="empty-title">{title}</div>
+      <div className="empty-desc">{desc}</div>
+      {action ? <div style={{ marginTop: 8 }}>{action}</div> : null}
+    </div>
+  )
+}
+
+export function ErrorState({ title, desc, onRetry }: { title: string; desc: string; onRetry?: () => void }) {
+  return (
+    <div className="empty-state" role="alert">
+      <div className="empty-icon" style={{ color: '#f43f5e' }}>
+        <AlertCircle size={24} />
+      </div>
+      <div className="empty-title">{title}</div>
+      <div className="empty-desc">{desc}</div>
+      {onRetry ? (
+        <button className="btn btn-secondary" onClick={onRetry}>
+          Try again
+        </button>
+      ) : null}
+    </div>
+  )
+}
+
+export function Toggle({
+  checked,
+  onChange,
+  label,
+}: {
+  checked: boolean
+  onChange: (v: boolean) => void
+  label: string
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      className="toggle"
+      onClick={() => onChange(!checked)}
+    />
+  )
+}
+
+export function Slider({
+  value,
+  min,
+  max,
+  step = 1,
+  onChange,
+  ariaLabel,
+}: {
+  value: number
+  min: number
+  max: number
+  step?: number
+  onChange: (v: number) => void
+  ariaLabel: string
+}) {
+  return (
+    <input
+      type="range"
+      className="slider"
+      value={value}
+      min={min}
+      max={max}
+      step={step}
+      aria-label={ariaLabel}
+      onChange={(e) => onChange(Number(e.target.value))}
+    />
+  )
+}
+
+export function Modal({
+  open,
+  title,
+  onClose,
+  children,
+}: {
+  open: boolean
+  title: string
+  onClose: () => void
+  children: ReactNode
+}) {
+  useEffect(() => {
+    if (!open) return
+    const h = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', h)
+    return () => window.removeEventListener('keydown', h)
+  }, [open, onClose])
+
+  if (!open) return null
+  return (
+    <div className="modal-overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="modal" role="dialog" aria-modal="true" aria-label={title}>
+        <div className="modal-head">
+          <div className="section-title" style={{ marginBottom: 0 }}>
+            {title}
+          </div>
+          <button className="btn btn-ghost" onClick={onClose} aria-label="Close dialog">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="modal-body">{children}</div>
+      </div>
+    </div>
+  )
+}
+
+export function AppIcon({ url, size = 32 }: { url: string | null; name?: string; size?: number }) {
+  const [failed, setFailed] = useState(false)
+  useEffect(() => setFailed(false), [url])
+  return (
+    <div className="app-icon" style={{ width: size, height: size }} aria-hidden>
+      {url && !failed ? (
+        <img src={url} alt="" onError={() => setFailed(true)} />
+      ) : (
+        <AppWindow size={Math.round(size * 0.55)} />
+      )}
+    </div>
+  )
+}
+
+export function Bar({ fraction }: { fraction: number }) {
+  const pct = Math.max(0, Math.min(1, fraction)) * 100
+  return (
+    <div className="bar">
+      <div style={{ width: `${pct}%` }} />
+    </div>
+  )
+}
+
+export function Segmented<T extends string>({
+  options,
+  value,
+  onChange,
+}: {
+  options: { value: T; label: string }[]
+  value: T
+  onChange: (v: T) => void
+}) {
+  return (
+    <div className="segmented" role="tablist">
+      {options.map((o) => (
+        <button
+          key={o.value}
+          role="tab"
+          aria-selected={value === o.value}
+          className={value === o.value ? 'active' : ''}
+          onClick={() => onChange(o.value)}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+/** Tiny inline toast icon helper. */
+export function ToastIcon({ message }: { message: string }) {
+  const isError = /fail|error|couldn't|could not/i.test(message)
+  return isError ? <AlertCircle size={16} color="#f43f5e" /> : <Info size={16} />
+}
+
+export { Check, Loader2 }

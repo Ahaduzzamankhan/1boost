@@ -1,0 +1,11 @@
+node_modules/
+dist/
+dist-electron/
+release/
+resources/native/
+resources/icons/*.ico
+*.user-data/
+.DS_Store
+.freebuff
+1boost-usage-export.json
+electron/native/target/

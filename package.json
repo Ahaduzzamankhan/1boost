@@ -1,0 +1,83 @@
+{
+  "name": "1boost",
+  "productName": "1Boost",
+  "version": "1.0.0",
+  "description": "1Boost — PC usage analytics for Windows",
+  "author": "1Boost",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "main": "dist-electron/main/index.cjs",
+  "build": {
+    "appId": "com.ahaduzzamankhan.oneboost",
+    "productName": "1Boost",
+    "directories": {
+      "output": "release/${version}"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/native",
+        "to": "native",
+        "filter": ["**/*.dll"]
+      },
+      {
+        "from": "resources/icons",
+        "to": "icons",
+        "filter": ["*.ico"]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "resources/icons/icon.ico",
+      "artifactName": "1Boost-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "1Boost"
+    }
+  },
+  "scripts": {
+    "native:build": "cargo build --release --manifest-path electron/native/Cargo.toml && node scripts/copy-native.mjs",
+    "dist": "npm run build && electron-builder --win nsis --x64",
+    "dist:portable": "npm run build && electron-builder --win portable --x64",
+    "native:build:dev": "cargo build --manifest-path electron/native/Cargo.toml && node scripts/copy-native.mjs",
+    "build:main": "node scripts/build.mjs main",
+    "build:preload": "node scripts/build.mjs preload",
+    "build:renderer": "node scripts/build.mjs renderer",
+    "build": "npm run typecheck && npm run native:build && npm run build:main && npm run build:preload && npm run build:renderer",
+    "dev": "node scripts/build.mjs all --watch",
+    "start": "electron .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "electron": "^37.0.0",
+    "koffi": "^3.3.2",
+    "lucide-react": "^0.525.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "electron-builder": "^25.1.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.6.0",
+    "vitest": "^3.0.0"
+  }
+}
