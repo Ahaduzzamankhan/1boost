@@ -17,6 +17,19 @@ locally on your device.
   tracking, idle threshold, history retention, data export/delete, and reduced
   motion.
 
+### New in v1.1.2
+
+- **Update channels** — stable installs are never auto-updated to alpha/beta
+  builds; they only follow stable releases. Installs from an alpha/beta tag
+  watch the beta channel and automatically return to the stable channel as
+  soon as a newer stable release exists.
+- **Transparency glitches fixed** — the glass themes composited a full-window
+  blur plus a per-card blur every frame, causing black/white flicker bands.
+  The window is now natively transparent with a single blur layer.
+- Assorted cleanups: removed a no-op assignment in the app-switch tracker,
+  replaced hidden `require()` calls with static imports, and a no-white-flash
+  window background.
+
 ### New in v1.1.1
 
 - **Automatic updates** — 1Boost checks GitHub Releases in the background,

@@ -61,6 +61,9 @@ export function toggleMainWindow(): void {
 
 export function createMainWindow(): BrowserWindow {
   const preloader = join(__dirname, '../preload/index.cjs')
+  // Glass themes need a genuinely transparent window; solid themes paint
+  // their own full-bleed background so transparency is harmless there.
+  const transparent = true
   const win = new BrowserWindow({
     width: 1200,
     height: 760,
@@ -68,7 +71,8 @@ export function createMainWindow(): BrowserWindow {
     minHeight: 600,
     show: false,
     frame: false,
-    backgroundColor: '#0a0c10',
+    backgroundColor: transparent ? '#00000000' : '#0a0c10',
+    transparent,
     title: '1Boost',
     icon: getIconPath(),
     webPreferences: {
@@ -78,6 +82,7 @@ export function createMainWindow(): BrowserWindow {
       nodeIntegrationInWorker: false,
       sandbox: false,
       spellcheck: false,
+      backgroundThrottling: false,
     },
   })
 

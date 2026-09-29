@@ -226,9 +226,14 @@ button:focus-visible,
   background: var(--bg);
 }
 
+/* Single blur layer on the app root only. Nested backdrop-filters (per-card)
+   re-composite every frame and caused black/white flicker bands on the
+   transparent themes. */
 :root[data-glass='1'] .app {
   backdrop-filter: blur(var(--blur)) saturate(140%);
   -webkit-backdrop-filter: blur(var(--blur)) saturate(140%);
+  transform: translateZ(0);
+  will-change: backdrop-filter;
 }
 
 .titlebar {
@@ -425,11 +430,6 @@ button:focus-visible,
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: var(--space-5);
-}
-
-:root[data-glass='1'] .card {
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
 }
 
 .grid-metrics {

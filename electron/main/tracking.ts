@@ -26,11 +26,14 @@ import {
   buildDashboard,
   buildLiveSnapshot,
   closeSession,
+  computeTotals,
+  dailyTrend,
   dayKey,
   emptyDay,
   ensureDay,
   openSession,
   parseDayKey,
+  sessionStats,
   sortedDayKeys,
   topAppsForDay,
   topAppsOverall,
@@ -191,8 +194,6 @@ export class Tracker {
       const ident = this.identityFor(path)
       if (!this.current || this.current.key !== ident.key) {
         this.switchApp(ident.key, ident.name, path, now)
-      } else {
-        this.current.startMs = this.current.startMs // unchanged
       }
     } else if (!s.foregroundOk && this.current) {
       // Foreground lost (e.g. lock screen transition, secure desktop)
@@ -476,7 +477,6 @@ export class Tracker {
   // ---------------------------------------------------------------------------
 
   statsOverview(): StatsOverview {
-    const { computeTotals, sessionStats } = require('./aggregator') as typeof import('./aggregator')
     const totals = computeTotals(this.data)
     const days = Math.max(1, totals.days)
     const { avgSessionMs, longestSession } = sessionStats(this.data)
@@ -493,7 +493,6 @@ export class Tracker {
   }
 
   trend(days: number): TrendData {
-    const { dailyTrend } = require('./aggregator') as typeof import('./aggregator')
     const n = Math.min(365, Math.max(7, Math.round(days)))
     const points = dailyTrend(this.data, n, Date.now())
     const withData = points.filter((p) => p.activeMs > 0)

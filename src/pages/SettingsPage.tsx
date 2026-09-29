@@ -423,6 +423,8 @@ export default function SettingsPage({
               <div className="setting-title">Automatic updates</div>
               <div className="setting-desc">
                 New releases are downloaded in the background from GitHub. 1Boost asks before restarting to install.
+                Stable installs never receive alpha/beta builds; prerelease installs return to the stable channel
+                automatically once a newer stable release is out.
               </div>
             </div>
             {update?.status === 'up-to-date' ? (
