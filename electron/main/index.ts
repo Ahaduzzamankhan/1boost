@@ -84,10 +84,11 @@ function bootstrap(): void {
     wireTracker()
     tracker.start()
 
-    // System monitoring (Rust-backed). The poll timer starts on first
-    // renderer subscription and auto-stops after an idle linger window.
+    // System monitoring (Rust-backed). Samples continuously for the app
+    // session; pushes only reach renderers that subscribed.
     monitor = new Monitor()
     monitor.registerIpc()
+    monitor.start()
 
     // Window + tray.
     setWindowHooks({

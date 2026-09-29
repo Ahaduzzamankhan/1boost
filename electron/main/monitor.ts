@@ -1,31 +1,29 @@
 // System-monitoring service (main process).
 //
-// The renderer never polls: opening the Monitor page calls
-// `oneboost:monitor-subscribe` (sent by the preload bridge when a listener is
-// registered), which starts the shared poll and delivers a fresh seed sample.
-// Subsequent samples arrive as one IPC push per tick while at least one
-// subscriber exists. The poll always runs at a steady cadence while subscribed
-// (rate metrics need evenly spaced samples), with a short overlap after the
-// last unsubscribe so re-opening the page doesn't restart from "unavailable".
+// Resilience model (v1.1.5): the native layer is sampled on a steady timer for
+// the entire app session — never gated on renderer subscriptions. Subscribing
+// only arms *pushing*. This removes the whole class of "page shows one sample
+// and freezes" bugs caused by a dropped/never-arriving subscribe round-trip:
+// even if IPC registration is lost, the renderer's watchdog fallback poll
+// (MonitorPage) still gets fresh data via oneboost:get-monitor.
+//
+// Pushes fan out to every live renderer while any of them is subscribed.
+// Unsubscribed windows stay silent; the timer keeps running so rate metrics
+// (bytes/sec, CPU%) stay valid with evenly spaced samples.
 
-import { BrowserWindow, ipcMain } from 'electron'
+import { ipcMain } from 'electron'
 import type { MonitorSample } from '../../shared/types'
 import { nativeMonitorSample, nativeMonitorShutdown } from './native'
 
 /** Poll cadence for the native layer. Rate metrics (bytes/sec) need an
  *  even spacing; 2 s balances smoothness against resource usage. */
 const POLL_MS = 2_000
-/** Keep sampling this long after the last subscriber unsubscribes, so briefly
- *  switching pages does not zero out the rate counters. */
-const IDLE_LINGER_MS = 30_000
 
 export class Monitor {
   private timer: NodeJS.Timeout | null = null
   private last: MonitorSample | null = null
-  private subscribers = 0
-  private rendererUnsub: (() => void) | null = null
-  private lastUnsubscribeMs = 0
-  private healthy = true
+  private lastError: string | null = null
+  private subscribed = new Set<Electron.WebContents>()
   private stopped = false
 
   start(): void {
@@ -41,24 +39,13 @@ export class Monitor {
       this.timer = null
     }
     this.last = null
-    this.rendererUnsub = null
+    this.lastError = null
+    this.subscribed.clear()
     nativeMonitorShutdown()
   }
 
-  /** Current snapshot: the cached one if fresh, else one fresh sample. */
-  subscribe(): () => void {
-    this.subscribers++
-    this.start()
-    const self = this
-    return () => {
-      self.subscribers = Math.max(0, self.subscribers - 1)
-      if (self.subscribers === 0) self.lastUnsubscribeMs = Date.now()
-    }
-  }
-
-  /** Seed sample on demand: fresh when none is cached yet. */
+  /** Latest cached sample; samples once when nothing is cached yet. */
   current(): MonitorSample | null {
-    if (!this.healthy) return null
     if (!this.last) return this.sampleOnce()
     return this.last
   }
@@ -66,60 +53,58 @@ export class Monitor {
   registerIpc(): void {
     ipcMain.handle('oneboost:get-monitor', () => this.current())
     ipcMain.on('oneboost:monitor-subscribe', (e) => {
-      // One live subscription per renderer; the unsubscribe callback is
-      // refcounted, so two Monitor pages (never happens) would still be safe.
-      if (this.subscribers === 0 || !this.rendererUnsub) {
-        this.rendererUnsub = this.subscribe()
-      }
-      // Answer on the same channel the renderer listens to for pushes, so a
-      // fresh seed is never lost to the race between invoke() and push.
+      const wc = e.sender
+      this.subscribed.add(wc)
+      wc.once('destroyed', () => this.subscribed.delete(wc))
+      // Seed on the push channel so a fresh sample is never lost to the race
+      // between invoke() and the first periodic push.
       const s = this.current()
-      if (s && !e.sender.isDestroyed()) e.sender.send('oneboost:monitor', s)
+      if (s && !wc.isDestroyed()) wc.send('oneboost:monitor', s)
     })
-    ipcMain.on('oneboost:monitor-unsubscribe', () => {
-      if (this.rendererUnsub) {
-        this.rendererUnsub()
-        this.rendererUnsub = null
-      }
+    ipcMain.on('oneboost:monitor-unsubscribe', (e) => {
+      this.subscribed.delete(e.sender)
     })
   }
+
+  /** Consecutive failures before the native layer is considered broken. */
+  private failures = 0
 
   private sampleOnce(): MonitorSample | null {
     try {
       const s = nativeMonitorSample()
-      if (!this.healthy) {
-        this.healthy = true
-      }
+      this.failures = 0
       this.last = s
       return s
     } catch (e) {
-      // Native layer missing/failed: report null and stop pushing until it
-      // recovers. The renderer shows a graceful "unavailable" state.
-      if (this.healthy) {
-        this.healthy = false
-        console.error('[1boost] monitoring unavailable:', String(e))
+      this.failures++
+      this.lastError = String(e)
+      if (this.failures === 1 || this.failures % 30 === 0) {
+        console.error('[1boost] monitoring sample failed:', String(e))
       }
+      // Keep the last good sample cached (marked by its staleness) so the UI
+      // can keep rendering; the renderer watchdog also polls independently.
       return null
     }
   }
 
   private tick(): void {
     if (this.stopped) return
-    if (this.subscribers === 0) {
-      if (Date.now() - this.lastUnsubscribeMs > IDLE_LINGER_MS) {
-        // Nothing is listening: drop the timer entirely and free the PDH query.
-        this.stop()
-      }
-      return
-    }
     const s = this.sampleOnce()
     if (s) this.push(s)
   }
 
   private push(s: MonitorSample): void {
-    const win = BrowserWindow.getAllWindows()[0]
-    if (win && !win.isDestroyed()) {
-      win.webContents.send('oneboost:monitor', s)
+    for (const wc of this.subscribed) {
+      if (!wc.isDestroyed()) {
+        wc.send('oneboost:monitor', s)
+      } else {
+        this.subscribed.delete(wc)
+      }
     }
+  }
+
+  /** Diagnostics for support: last error from the native layer, if any. */
+  get lastSampleError(): string | null {
+    return this.lastError
   }
 }

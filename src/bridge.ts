@@ -1,7 +1,7 @@
 import type { Bridge, PageId, Prefs } from '../shared/types'
 
 /** Browser-harness only: matches package.json so About/Updates never lie. */
-const HARNESS_VERSION = '1.1.4'
+const HARNESS_VERSION = '1.1.5'
 
 declare global {
   interface Window {

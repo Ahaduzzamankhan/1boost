@@ -4,6 +4,18 @@ All notable changes to 1Boost are documented here. The latest release's
 section is injected into the GitHub Release body by CI
 (`scripts/release-notes.mjs`).
 
+## [1.1.5] - 2026-09-29
+
+### Fixed
+
+- **Monitor keeps updating** — the native sampler now runs for the whole app
+  session instead of only while a subscription round-trip is alive, so the
+  page can no longer freeze on a single seed sample (CPU dash, 0 B/s, stuck
+  values). A renderer-side watchdog additionally re-polls if pushes ever
+  stall.
+- **GPU usage** is the busiest engine, not the sum over all engines (multi-
+  engine systems reported > 100%).
+
 ## [1.1.4] - 2026-09-29
 
 ### Fixed

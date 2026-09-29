@@ -118,8 +118,9 @@ export default function MonitorPage() {
     // seed and the first push can deliver the same cached snapshot — dedupe by
     // timestamp so no history point is ever doubled.
     const apply = (s: MonitorSample) => {
-      if (s.nowMs === lastAppliedMs) return
+      if (!s || s.nowMs === lastAppliedMs) return
       lastAppliedMs = s.nowMs
+      lastAppliedAt = Date.now()
       setSample(s)
       setAvailable(true)
       const total = s.memory.totalBytes || 0
@@ -135,6 +136,7 @@ export default function MonitorPage() {
       }))
     }
     let cancelled = false
+    let lastAppliedAt = 0
     bridge
       .getMonitorSample()
       .then((s) => {
@@ -145,8 +147,22 @@ export default function MonitorPage() {
         if (!cancelled) setAvailable(false)
       })
     unsubscribe = bridge.monitor(apply)
+    // Watchdog: if pushes stall (dropped subscription, IPC hiccup), fall back
+    // to polling so the page can never freeze on a stale seed sample.
+    const watchdog = setInterval(() => {
+      if (cancelled) return
+      if (Date.now() - lastAppliedAt > 6_000) {
+        void bridge
+          .getMonitorSample()
+          .then((s) => {
+            if (!cancelled && s) apply(s)
+          })
+          .catch(() => undefined)
+      }
+    }, 4_000)
     return () => {
       cancelled = true
+      clearInterval(watchdog)
       unsubscribe?.()
     }
   }, [])

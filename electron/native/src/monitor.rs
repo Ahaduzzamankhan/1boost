@@ -744,7 +744,7 @@ fn monitor_sample_inner(out: &mut BoostMonitorResult) -> i32 {
         if pdh_ok {
             unsafe {
                 if pdh.has_gpu_util {
-                    gpu_util = sum_counter_array(pdh.gpu_util);
+                    gpu_util = max_counter_array(pdh.gpu_util);
                 }
                 if pdh.has_gpu_mem {
                     gpu_mem = sum_counter_array(pdh.gpu_mem);
