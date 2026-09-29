@@ -12,7 +12,7 @@ import type {
 } from '../../shared/types'
 import { Tracker } from './tracking'
 import { Storage, sanitizePrefs } from './storage'
-import { setLaunchAtLogin } from './settings'
+import { getLaunchAtLoginState, setLaunchAtLogin, syncLaunchAtLogin, type LaunchState } from './settings'
 import {
   createMainWindow,
   createTray,
@@ -29,6 +29,7 @@ const PAGES: PageId[] = ['dashboard', 'apps', 'stats', 'history', 'settings']
 
 let storage: Storage | null = null
 let tracker: Tracker | null = null
+let launchState: LaunchState | null = null
 
 const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
@@ -51,6 +52,15 @@ function bootstrap(): void {
     // Load persisted state first.
     storage = new Storage()
     await storage.load()
+
+    // Re-assert the saved launch-at-login preference: repairs stale Run-key
+    // entries after updates and re-enables startup if Windows dropped it.
+    // (Skipped in unpackaged dev runs so we never register electron.exe.)
+    if (app.isPackaged || !storage.settings.prefs.launchAtLogin) {
+      launchState = syncLaunchAtLogin(storage.settings.prefs)
+    } else {
+      launchState = getLaunchAtLoginState(storage.settings.prefs)
+    }
 
     // Native tracking layer + orchestrator.
     tracker = new Tracker(storage)
@@ -118,6 +128,7 @@ function applyPrefInternal(key: keyof Prefs, value: Prefs[keyof Prefs]): void {
   }
   if (key === 'launchAtLogin' || key === 'startMinimized') {
     setLaunchAtLogin(next.launchAtLogin, next.startMinimized)
+    launchState = getLaunchAtLoginState(next)
   }
   if (key === 'showTray') {
     if (!next.showTray) destroyTray()
@@ -164,8 +175,16 @@ function registerIpc(): void {
       storage: storage!.status(),
       version: app.getVersion(),
       platform: process.platform,
+      launch: launchState ?? getLaunchAtLoginState(prefs),
       days: tracker!.historyDays(90).map((d) => ({ date: d.date, activeMs: d.activeMs, onMs: d.pcOnMs })),
     }
+  })
+
+  ipcMain.handle('oneboost:repair-launch', async () => {
+    const prefs = storage!.settings.prefs
+    setLaunchAtLogin(prefs.launchAtLogin, prefs.startMinimized)
+    launchState = getLaunchAtLoginState(prefs)
+    return launchState
   })
 
   ipcMain.handle('oneboost:set-pref', async (_e, key: string, value: unknown) => {

@@ -37,5 +37,13 @@ export default function App() {
       <LoadingScreen label="1Boost couldn't start tracking. Restart the app to try again." />
     )
   }
-  return <AppShell prefs={prefs} toasts={toasts} storage={storage} onDelete={onDelete} />
+  return (
+    <AppShell
+      prefs={prefs}
+      toasts={toasts}
+      storage={storage}
+      onDelete={onDelete}
+      version={initial.version}
+    />
+  )
 }

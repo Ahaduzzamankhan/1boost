@@ -114,11 +114,13 @@ export default function AppShell({
   toasts,
   storage,
   onDelete,
+  version,
 }: {
   prefs: Prefs
   toasts: ToastMsg[]
   storage: { file: string; bytes: number; recovered: boolean; healthy: boolean } | null
   onDelete: () => Promise<void>
+  version: string
 }) {
   const { page, navigate } = useNavigation()
   const ctx = useContextMenu()
@@ -168,7 +170,13 @@ export default function AppShell({
           {page === 'stats' && <StatsPage />}
           {page === 'history' && <HistoryPage />}
           {page === 'settings' && (
-            <SettingsPage prefs={prefs} setPref={setPrefBridge} storage={storage} onDelete={onDelete} />
+            <SettingsPage
+              prefs={prefs}
+              setPref={setPrefBridge}
+              storage={storage}
+              onDelete={onDelete}
+              version={version}
+            />
           )}
         </main>
       </div>

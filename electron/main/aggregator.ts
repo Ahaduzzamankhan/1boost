@@ -47,6 +47,7 @@ export function emptyDay(date: string, nowMs: number): DayData {
     lastMs: nowMs,
     batteryMs: 0,
     acMs: 0,
+    focusMs: 0,
     apps: {},
   }
 }
@@ -238,6 +239,7 @@ export function buildLiveSnapshot(
     paused: boolean
     currentApp: { key: string; name: string; startMs: number } | null
     battery: { charging: boolean; pct: number; noBattery: boolean }
+    batteryRemainingMin: number | null
     lastError: string | null
   },
 ): LiveSnapshot {
@@ -256,6 +258,7 @@ export function buildLiveSnapshot(
     appStartMs: opts.currentApp?.startMs ?? 0,
     appElapsedMs: opts.currentApp ? Math.max(0, opts.nowMs - opts.currentApp.startMs) : 0,
     battery: opts.battery,
+    batteryRemainingMin: opts.batteryRemainingMin,
     lastError: opts.lastError,
   }
 }
@@ -267,6 +270,7 @@ export function buildDashboard(
     paused: boolean
     currentApp: { key: string; name: string; startMs: number } | null
     battery: { charging: boolean; pct: number; noBattery: boolean }
+    batteryRemainingMin: number | null
     lastError: string | null
     appNames: Map<string, string>
     icons: Map<string, string | null>
@@ -295,7 +299,14 @@ export function buildDashboard(
     today,
     apps,
     hourly: hourHistogram(today),
-    snapshot: buildLiveSnapshot(data, today, opts),
+    snapshot: buildLiveSnapshot(data, today, {
+      nowMs: opts.nowMs,
+      paused: opts.paused,
+      currentApp: opts.currentApp,
+      battery: opts.battery,
+      batteryRemainingMin: opts.batteryRemainingMin,
+      lastError: opts.lastError,
+    }),
     totals: computeTotals(data),
     daily: dailyTrend(data, opts.days, opts.nowMs),
   }
@@ -352,6 +363,9 @@ export function applySampleToDay(opts: ApplyOpts): void {
   if (sample.screenOn) day.screenOnMs += deltaMs
   if (sample.acOnline) day.acMs += deltaMs
   else if (!(sample.batteryFlag & 128)) day.batteryMs += deltaMs
+  // Fullscreen focus time (games, films): active use while the foreground
+  // window covers its monitor.
+  if (active && sample.isFullscreen) day.focusMs += deltaMs
   touchDay(day, sample.nowEpochMs)
 }
 

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   Palette,
   Power,
@@ -10,8 +10,10 @@ import {
   Download,
   Trash2,
   FolderOpen,
+  Wrench,
+  AlertCircle,
 } from 'lucide-react'
-import type { AccentId, Prefs, ThemeId } from '../../shared/types'
+import type { AccentId, LaunchState, Prefs, ThemeId } from '../../shared/types'
 import { bridge, ACCENT_HEX } from '../bridge'
 import { Slider, Toggle } from '../components/ui'
 
@@ -59,14 +61,41 @@ export default function SettingsPage({
   setPref,
   storage,
   onDelete,
+  version,
 }: {
   prefs: Prefs
   setPref: (key: keyof Prefs, value: string | number | boolean) => Promise<void>
   storage: { file: string; bytes: number; recovered: boolean; healthy: boolean } | null
   onDelete: () => Promise<void>
+  version: string
 }) {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [exporting, setExporting] = useState(false)
+  const [launch, setLaunch] = useState<LaunchState | null>(null)
+  const [repairing, setRepairing] = useState(false)
+
+  const refreshLaunch = useCallback(async () => {
+    try {
+      const data = await bridge.getSettingsData()
+      setLaunch(data.launch)
+    } catch {
+      setLaunch(null)
+    }
+  }, [])
+
+  useEffect(() => {
+    void refreshLaunch()
+  }, [refreshLaunch, prefs.launchAtLogin])
+
+  const repairLaunch = useCallback(async () => {
+    setRepairing(true)
+    try {
+      const state = await bridge.repairLaunch()
+      setLaunch(state)
+    } finally {
+      setRepairing(false)
+    }
+  }, [])
 
   const isGlass = prefs.theme === 'dark-glass' || prefs.theme === 'white-glass'
 
@@ -165,6 +194,27 @@ export default function SettingsPage({
             <div className="setting-info">
               <div className="setting-title">Launch at Windows startup</div>
               <div className="setting-desc">Keep 1Boost running from sign-in so tracking is continuous.</div>
+              {prefs.launchAtLogin && launch ? (
+                <div className="setting-desc" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {launch.registered && launch.pathMatches ? (
+                    <>
+                      <Check size={13} color="#22c55e" /> Active — starts when you sign in
+                    </>
+                  ) : (
+                    <>
+                      <AlertCircle size={13} color="#f59e0b" /> Windows is not starting 1Boost yet
+                      <button
+                        className="btn btn-ghost"
+                        style={{ height: 26, fontSize: 12, padding: '0 8px', marginLeft: 4 }}
+                        onClick={() => void repairLaunch()}
+                        disabled={repairing}
+                      >
+                        <Wrench size={12} /> {repairing ? 'Fixing…' : 'Fix now'}
+                      </button>
+                    </>
+                  )}
+                </div>
+              ) : null}
             </div>
             <Toggle checked={prefs.launchAtLogin} onChange={(v) => void setPref('launchAtLogin', v)} label="Launch at startup" />
           </div>
@@ -323,7 +373,7 @@ export default function SettingsPage({
         <div className="card">
           <div className="setting-row">
             <div className="setting-info">
-              <div className="setting-title">1Boost v1.0.0</div>
+              <div className="setting-title">1Boost v{version}</div>
               <div className="setting-desc">
                 PC usage analytics for Windows. All data stays on this device.
               </div>

@@ -1,13 +1,17 @@
 // Persistent JSON storage for 1Boost: atomic writes, corruption recovery,
 // settings persistence, and derived-history bookkeeping.
 
-import { promises as fs, statSync, writeFileSync, renameSync } from 'node:fs'
+import { promises as fs, statSync, writeFileSync, renameSync, copyFileSync, existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { app } from 'electron'
 import type { Prefs, UsageData } from '../../shared/types'
 import { rebuildTotals } from './aggregator'
 
 const DATA_VERSION = 1
+/** Rolling backup copies kept next to the data file. */
+const BACKUP_COUNT = 3
+/** Minimum interval between backup rotations (saves can be very frequent). */
+const BACKUP_MIN_INTERVAL_MS = 5 * 60_000
 
 export const DEFAULT_PREFS: Prefs = {
   theme: 'dark-glass',
@@ -36,6 +40,7 @@ export class Storage {
   settings: SettingsFile
   recovered = false
   lastError: string | null = null
+  private lastBackupAt = 0
 
   constructor(dataPath?: string, settingsPath?: string) {
     const userData = dataPath ?? (app.isReady() ? app.getPath('userData') : undefined)
@@ -51,6 +56,83 @@ export class Storage {
     await this.ensureDirs()
     await this.loadData()
     await this.loadSettings()
+    // Once a healthy file is settled, take a fresh snapshot of it.
+    if (!this.recovered) this.writeBackup(0)
+  }
+
+  /** Copy the healthy data file to a numbered rolling backup slot. */
+  private writeBackup(slot: number): void {
+    if (!existsSync(this.dataPath)) return
+    try {
+      copyFileSync(this.dataPath, this.backupPath(slot))
+    } catch {
+      /* backup is best-effort; never block loading */
+    }
+  }
+
+  private backupPath(slot: number): string {
+    return `${this.dataPath}.bak${slot}`
+  }
+
+  /**
+   * After every successful save, rotate backups so a later crash / disk issue
+   * can never destroy the last known-good copies (slots 0..BACKUP_COUNT-1).
+   */
+  private rotateBackups(): void {
+    for (let i = BACKUP_COUNT - 1; i > 0; i--) {
+      const older = this.backupPath(i - 1)
+      if (existsSync(older)) {
+        try {
+          copyFileSync(older, this.backupPath(i))
+        } catch {
+          /* best-effort */
+        }
+      }
+    }
+    this.writeBackup(0)
+  }
+
+  /** Best-effort rebuild of the newest backup after a successful save. */
+  private scheduleBackup(): void {
+    try {
+      const now = Date.now()
+      if (now - this.lastBackupAt < BACKUP_MIN_INTERVAL_MS) return
+      this.lastBackupAt = now
+      this.rotateBackups()
+    } catch {
+      /* never fail a save because of backups */
+    }
+  }
+
+  /**
+   * Try to recover data from the rolling backups when the primary file is
+   * unreadable. Returns true if a backup was restored.
+   */
+  private tryRecoverFromBackups(): boolean {
+    for (let slot = 0; slot < BACKUP_COUNT; slot++) {
+      const p = this.backupPath(slot)
+      if (!existsSync(p)) continue
+      try {
+        const raw = readFileSync(p, 'utf8')
+        const parsed = JSON.parse(raw) as UsageData
+        if (parsed && typeof parsed === 'object' && typeof parsed.days === 'object' && parsed.days !== null) {
+          // Primary file is untrustworthy; replace it with the good backup.
+          try {
+            copyFileSync(p, this.dataPath)
+          } catch {
+            /* fall through to in-memory recovery below */
+          }
+          this.data = normalizeUsageData(parsed)
+          rebuildTotals(this.data)
+          this.recovered = true
+          this.lastError = 'Your usage file was damaged; 1Boost restored the most recent backup.'
+          return true
+        }
+      } catch {
+        /* try next slot */
+      }
+    }
+    return false
   }
 
   private async ensureDirs(): Promise<void> {
@@ -74,49 +156,22 @@ export class Storage {
     if (res.ok) {
       const v = res.value
       if (v && typeof v === 'object' && typeof v.days === 'object' && v.days !== null) {
-        // Normalize + validate day buckets to survive schema drift / hand edits.
-        const days: UsageData['days'] = {}
-        for (const [k, d] of Object.entries(v.days)) {
-          if (!/^\d{4}-\d{2}-\d{2}$/.test(k) || !d || typeof d !== 'object') continue
-          days[k] = {
-            date: k,
-            pcOnMs: num(d.pcOnMs),
-            activeMs: num(d.activeMs),
-            idleMs: num(d.idleMs),
-            screenOnMs: num(d.screenOnMs),
-            firstMs: num(d.firstMs),
-            lastMs: num(d.lastMs),
-            batteryMs: num(d.batteryMs),
-            acMs: num(d.acMs),
-            apps: sanitizeApps(d.apps),
-          }
-        }
-        const sessions = Array.isArray(v.sessions)
-          ? v.sessions.filter(
-              (s: unknown): s is UsageData['sessions'][number] =>
-                !!s && typeof s === 'object' && typeof (s as UsageData['sessions'][number]).startMs === 'number',
-            )
-          : []
-        this.data = {
-          version: DATA_VERSION,
-          createdAt: num(v.createdAt) || Date.now(),
-          updatedAt: num(v.updatedAt) || Date.now(),
-          days,
-          sessions,
-          totals: { pcOnMs: 0, activeMs: 0, idleMs: 0, days: 0 },
-          pendingSession: sanitizePending(v.pendingSession),
-          appNames: sanitizeAppNames(v.appNames),
-        }
+        this.data = normalizeUsageData(v)
         rebuildTotals(this.data)
         return
       }
+      // Recognizable file but wrong shape: try backups before giving up.
+      if (this.tryRecoverFromBackups()) return
       this.recovered = true
       this.lastError = 'Unrecognized data file format; starting fresh.'
       return
     }
     if (res.exists) {
+      // Primary file is unreadable (truncated JSON, encoding error, etc.) —
+      // try the rolling backups before starting from zero.
+      if (this.tryRecoverFromBackups()) return
       this.recovered = true
-      this.lastError = 'Your usage file could not be read. 1Boost will rebuild it automatically.'
+      this.lastError = 'Your usage file could not be read and no backup was usable. 1Boost will rebuild it automatically.'
     }
   }
 
@@ -146,7 +201,7 @@ export class Storage {
     await fs.rename(tmp, this.settingsPath)
   }
 
-  /** Write usage data atomically; called on a debounced schedule by the tracker. */
+  /** Write usage data atomically (tmp file + rename); rotated backups follow. */
   async saveData(): Promise<void> {
     await this.ensureDirs()
     this.data.updatedAt = Date.now()
@@ -154,9 +209,13 @@ export class Storage {
     const payload = JSON.stringify(this.data)
     await fs.writeFile(tmp, payload, 'utf8')
     await fs.rename(tmp, this.dataPath)
+    this.scheduleBackup()
   }
 
-  /** Synchronous atomic write for exit-time flushes. */
+  /**
+   * Synchronous atomic write for exit-time flushes. Also used for
+   * suspend/shutdown critical saves where async writes may never complete.
+   */
   saveDataSync(): void {
     this.data.updatedAt = Date.now()
     const tmp = this.dataPath + '.tmp'
@@ -169,6 +228,14 @@ export class Storage {
     await this.ensureDirs()
     await fs.rm(this.dataPath, { force: true })
     await this.saveData()
+    // Remove stale backups so a deleted history can't silently resurrect.
+    for (let slot = 0; slot < BACKUP_COUNT; slot++) {
+      try {
+        await fs.rm(this.backupPath(slot), { force: true })
+      } catch {
+        /* ignore */
+      }
+    }
   }
 
   status(): { file: string; bytes: number; recovered: boolean; healthy: boolean } {
@@ -196,6 +263,43 @@ export function emptyUsage(): UsageData {
 
 function num(v: unknown): number {
   return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0
+}
+
+/** Normalize + validate a parsed UsageData to survive schema drift / hand edits. */
+export function normalizeUsageData(v: UsageData): UsageData {
+  const days: UsageData['days'] = {}
+  for (const [k, d] of Object.entries(v.days)) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(k) || !d || typeof d !== 'object') continue
+    days[k] = {
+      date: k,
+      pcOnMs: num(d.pcOnMs),
+      activeMs: num(d.activeMs),
+      idleMs: num(d.idleMs),
+      screenOnMs: num(d.screenOnMs),
+      firstMs: num(d.firstMs),
+      lastMs: num(d.lastMs),
+      batteryMs: num(d.batteryMs),
+      acMs: num(d.acMs),
+      focusMs: num((d as { focusMs?: unknown }).focusMs),
+      apps: sanitizeApps(d.apps),
+    }
+  }
+  const sessions = Array.isArray(v.sessions)
+    ? v.sessions.filter(
+        (s: unknown): s is UsageData['sessions'][number] =>
+          !!s && typeof s === 'object' && typeof (s as UsageData['sessions'][number]).startMs === 'number',
+      )
+    : []
+  return {
+    version: DATA_VERSION,
+    createdAt: num(v.createdAt) || Date.now(),
+    updatedAt: num(v.updatedAt) || Date.now(),
+    days,
+    sessions,
+    totals: { pcOnMs: 0, activeMs: 0, idleMs: 0, days: 0 },
+    pendingSession: sanitizePending(v.pendingSession),
+    appNames: sanitizeAppNames(v.appNames),
+  }
 }
 
 function sanitizeApps(apps: unknown): Record<string, number> {

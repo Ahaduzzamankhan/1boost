@@ -41,12 +41,13 @@ use windows_sys::Win32::System::Threading::{
     GetCurrentThreadId, OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
+use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetForegroundWindow,
-    GetWindowThreadProcessId, IsIconic, IsWindowVisible, MsgWaitForMultipleObjectsEx, PeekMessageW,
-    PostThreadMessageW, RegisterClassW, TranslateMessage, MSG, MWMO_INPUTAVAILABLE, QS_ALLINPUT,
-    WNDCLASSW, WM_APP, WM_DISPLAYCHANGE, WM_ENDSESSION, WM_POWERBROADCAST, WM_QUERYENDSESSION,
-    WM_WTSSESSION_CHANGE,
+    GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindowVisible, MsgWaitForMultipleObjectsEx,
+    PeekMessageW, PostThreadMessageW, RegisterClassW, TranslateMessage, MSG, MWMO_INPUTAVAILABLE,
+    QS_ALLINPUT, WNDCLASSW, WM_APP, WM_DISPLAYCHANGE, WM_ENDSESSION, WM_POWERBROADCAST,
+    WM_QUERYENDSESSION, WM_WTSSESSION_CHANGE,
 };
 
 // ---------------------------------------------------------------------------
@@ -167,6 +168,10 @@ pub struct BoostSampleResult {
     /// Raw SYSTEM_POWER_STATUS.BatteryFlag (128 = no battery).
     pub battery_flag: u8,
     pub fg: BoostForegroundApp,
+    /// 1 when the foreground window covers its monitor (fullscreen/game/film).
+    pub is_fullscreen: i32,
+    /// Windows BatteryLifeTime in minutes; -1 = unknown / on AC / no battery.
+    pub battery_remaining_min: i32,
 }
 
 #[repr(C)]
@@ -244,6 +249,31 @@ unsafe fn fg_from_window(hwnd: isize, out: &mut BoostForegroundApp) -> bool {
         CloseHandle(h);
     }
     true
+}
+
+/// True when the window's rect fully covers its monitor (fullscreen app/video).
+/// A plain maximized window never covers the taskbar, so this stays false there.
+unsafe fn is_fullscreen_window(hwnd: isize) -> bool {
+    if hwnd == 0 {
+        return false;
+    }
+    let mut rect = std::mem::zeroed();
+    if GetWindowRect(hwnd, &mut rect) == 0 {
+        return false;
+    }
+    let mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+    if mon == 0 {
+        return false;
+    }
+    let mut mi: MONITORINFO = std::mem::zeroed();
+    mi.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+    if GetMonitorInfoW(mon, &mut mi) == 0 {
+        return false;
+    }
+    rect.left <= mi.rcMonitor.left
+        && rect.right >= mi.rcMonitor.right
+        && rect.top <= mi.rcMonitor.top
+        && rect.bottom >= mi.rcMonitor.bottom
 }
 
 /// Probe the console session lock state via WTSINFOEX (SessionFlags at byte 16).
@@ -589,6 +619,7 @@ unsafe fn collect_once_inner(out: &mut BoostSampleResult, idle_threshold_ms: u32
     if hwnd != 0 && fg_from_window(hwnd, &mut fg) {
         foreground_ok = 1;
     }
+    let fullscreen = is_fullscreen_window(hwnd);
 
     let mut lii = LASTINPUTINFO {
         cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
@@ -629,6 +660,16 @@ unsafe fn collect_once_inner(out: &mut BoostSampleResult, idle_threshold_ms: u32
     out.battery_pct = ps.BatteryLifePercent;
     out.battery_flag = ps.BatteryFlag;
     out.fg = fg;
+    out.is_fullscreen = fullscreen as i32;
+    out.battery_remaining_min = if ps.BatteryFlag & 128 != 0
+        || ps.ACLineStatus == 1
+        || ps.BatteryLifeTime == 0xFFFF_FFFF
+        || ps.BatteryLifeTime == 0
+    {
+        -1
+    } else {
+        (ps.BatteryLifeTime / 60).min(i32::MAX as u32) as i32
+    };
     1
 }
 
@@ -703,7 +744,7 @@ mod tests {
         assert_eq!(offset_of!(BoostForegroundApp, process_name), 0);
         assert_eq!(offset_of!(BoostForegroundApp, process_id), 520);
 
-        assert_eq!(size_of::<BoostSampleResult>(), 584);
+        assert_eq!(size_of::<BoostSampleResult>(), 592);
         assert_eq!(offset_of!(BoostSampleResult, uptime_ms), 0);
         assert_eq!(offset_of!(BoostSampleResult, now_epoch_ms), 8);
         assert_eq!(offset_of!(BoostSampleResult, ok), 16);
@@ -718,6 +759,8 @@ mod tests {
         assert_eq!(offset_of!(BoostSampleResult, battery_pct), 52);
         assert_eq!(offset_of!(BoostSampleResult, battery_flag), 53);
         assert_eq!(offset_of!(BoostSampleResult, fg), 56);
+        assert_eq!(offset_of!(BoostSampleResult, is_fullscreen), 580);
+        assert_eq!(offset_of!(BoostSampleResult, battery_remaining_min), 584);
 
         assert_eq!(size_of::<BoostEventData>(), 24);
         assert_eq!(offset_of!(BoostEventData, value), 0);

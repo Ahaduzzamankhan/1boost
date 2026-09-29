@@ -45,6 +45,7 @@ function createBrowserHarnessBridge(): Bridge {
     lastMs: Date.now(),
     batteryMs: 0,
     acMs: 0,
+    focusMs: 0,
     apps: {},
   }
   const dashboard = {
@@ -66,6 +67,7 @@ function createBrowserHarnessBridge(): Bridge {
       appStartMs: 0,
       appElapsedMs: 0,
       battery: { charging: false, pct: 100, noBattery: true },
+      batteryRemainingMin: null,
       lastError: null,
     },
     totals: { pcOnMs: 0, activeMs: 0, idleMs: 0, days: 0 },
@@ -126,7 +128,15 @@ function createBrowserHarnessBridge(): Bridge {
       storage: { file: '(browser preview)', bytes: 0, recovered: false, healthy: true },
       version: '1.0.0',
       platform: 'browser',
+      launch: { enabled: false, registered: false, pathMatches: false, needsRepair: false, registeredPath: null },
       days: [],
+    }),
+    repairLaunch: async () => ({
+      enabled: false,
+      registered: false,
+      pathMatches: false,
+      needsRepair: false,
+      registeredPath: null,
     }),
     setPref: async (key, value) => {
       ;(prefs as unknown as Record<string, unknown>)[key] = value

@@ -63,6 +63,8 @@ describe('day buckets', () => {
       nowEpochMs: 1_000,
       processId: 1,
       processName: 'x',
+      isFullscreen: false,
+      batteryRemainingMin: -1,
     }
     applySampleToDay({ sample: s, prev: null, deltaMs: 1_000, day, appKey: 'a', appName: 'A' })
     applySampleToDay({
@@ -77,6 +79,41 @@ describe('day buckets', () => {
     expect(day.activeMs).toBe(1_000)
     expect(day.idleMs).toBe(500)
     expect(day.acMs).toBe(1_500)
+    expect(day.focusMs).toBe(0)
+  })
+
+  it('applySampleToDay accumulates focusMs only for active fullscreen samples', () => {
+    const day = emptyDay('2026-09-28', 0)
+    const s = {
+      ok: true,
+      foregroundOk: true,
+      hasWindow: true,
+      screenOn: true,
+      consoleLocked: false,
+      activeSession: true,
+      inputActive: true,
+      idleMs: 0,
+      acOnline: true,
+      batteryPct: 100,
+      batteryFlag: 1,
+      uptimeMs: 0,
+      nowEpochMs: 1_000,
+      processId: 1,
+      processName: 'x',
+      isFullscreen: true,
+      batteryRemainingMin: 120,
+    }
+    applySampleToDay({ sample: s, prev: null, deltaMs: 2_000, day, appKey: 'game', appName: 'Game' })
+    applySampleToDay({
+      sample: { ...s, inputActive: false },
+      prev: null,
+      deltaMs: 1_000,
+      day,
+      appKey: 'game',
+      appName: 'Game',
+    })
+    expect(day.focusMs).toBe(2_000)
+    expect(day.activeMs).toBe(2_000)
   })
 
   it('topAppsForDay sorts descending', () => {
@@ -168,5 +205,37 @@ describe('pref defaults', () => {
     expect(DEFAULT_PREFS.theme).toBe('dark-glass')
     expect(DEFAULT_PREFS.idleThresholdMin).toBe(1)
     expect(DEFAULT_PREFS.keepHistoryDays).toBeGreaterThanOrEqual(7)
+  })
+})
+
+describe('usage data normalization', () => {
+  it('fills focusMs with 0 when loading legacy data without it', async () => {
+    const legacy = {
+      version: 1,
+      createdAt: 1_000,
+      updatedAt: 2_000,
+      days: {
+        '2026-09-28': {
+          date: '2026-09-28',
+          pcOnMs: 3_600_000,
+          activeMs: 2_400_000,
+          idleMs: 1_200_000,
+          screenOnMs: 3_600_000,
+          firstMs: 0,
+          lastMs: 0,
+          batteryMs: 0,
+          acMs: 0,
+          apps: { chrome: 1_800_000 },
+        },
+      },
+      sessions: [],
+      totals: { pcOnMs: 0, activeMs: 0, idleMs: 0, days: 0 },
+      pendingSession: null,
+      appNames: {},
+    }
+    const { normalizeUsageData } = await import('../electron/main/storage')
+    const normalized = normalizeUsageData(legacy as never)
+    expect(normalized.days['2026-09-28'].focusMs).toBe(0)
+    expect(normalized.days['2026-09-28'].activeMs).toBe(2_400_000)
   })
 })

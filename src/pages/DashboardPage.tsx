@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Clock, Activity, Coffee, Grid2X2, ChevronRight, PauseCircle } from 'lucide-react'
+import { Clock, Activity, Coffee, Grid2X2, ChevronRight, PauseCircle, Expand, BatteryFull, BatteryCharging, AlertCircle } from 'lucide-react'
 import type { TrendPoint } from '../../shared/types'
 import { useDashboard } from '../state'
 import { bridge } from '../bridge'
@@ -92,6 +92,49 @@ export default function DashboardPage() {
           </div>
         </div>
       </div>
+
+      {dashboard.today.focusMs > 0 || snapshot?.batteryRemainingMin != null ? (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: -8, marginBottom: 16 }}>
+          {dashboard.today.focusMs > 0 ? (
+            <div className="card" style={{ padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Expand size={15} color="var(--accent)" />
+              <span style={{ fontSize: 13 }}>
+                Fullscreen focus <b style={{ fontWeight: 650 }}>{formatDuration(dashboard.today.focusMs)}</b> today
+              </span>
+            </div>
+          ) : null}
+          {snapshot?.batteryRemainingMin != null ? (
+            <div className="card" style={{ padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 8 }}>
+              {snapshot.battery.charging ? (
+                <BatteryCharging size={15} color="#22c55e" />
+              ) : (
+                <BatteryFull size={15} color="var(--text-secondary)" />
+              )}
+              <span style={{ fontSize: 13 }}>
+                {snapshot.battery.pct}%{snapshot.battery.charging ? ' charging' : ` · ~${Math.floor(snapshot.batteryRemainingMin / 60)}h ${snapshot.batteryRemainingMin % 60}m left`}
+              </span>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {snapshot?.lastError ? (
+        <div
+          className="card"
+          style={{
+            marginTop: 12,
+            padding: '10px 14px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            borderColor: 'rgba(245, 158, 11, 0.4)',
+          }}
+          role="alert"
+        >
+          <AlertCircle size={16} color="#f59e0b" />
+          <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{snapshot.lastError}</span>
+        </div>
+      ) : null}
 
       <div className="card chart-card">
         <div className="chart-head">

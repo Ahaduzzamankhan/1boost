@@ -30,6 +30,10 @@ export interface BoostSample {
   nowEpochMs: number
   processId: number
   processName: string
+  /** Foreground window covers its monitor (fullscreen game / video). */
+  isFullscreen: boolean
+  /** Windows estimate of remaining battery minutes; -1 = unknown / on AC. */
+  batteryRemainingMin: number
 }
 
 export type BoostEventKind =
@@ -55,6 +59,15 @@ export interface Prefs {
   showTray: boolean
 }
 
+/** Windows login-item state as probed from the main process. */
+export interface LaunchState {
+  enabled: boolean
+  registered: boolean
+  pathMatches: boolean
+  needsRepair: boolean
+  registeredPath: string | null
+}
+
 export interface LiveSnapshot {
   version: number
   nowMs: number
@@ -70,6 +83,8 @@ export interface LiveSnapshot {
   appStartMs: number
   appElapsedMs: number
   battery: { charging: boolean; pct: number; noBattery: boolean }
+  /** Estimated minutes of battery life remaining (null when on AC / no battery). */
+  batteryRemainingMin: number | null
   lastError: string | null
 }
 
@@ -91,6 +106,8 @@ export interface DayData {
   lastMs: number
   batteryMs: number
   acMs: number
+  /** Active time in the focused (fullscreen) foreground app. */
+  focusMs: number
   apps: Record<string, number>
 }
 
@@ -185,6 +202,15 @@ export interface StorageStatus {
   healthy: boolean
 }
 
+export interface SettingsPayload {
+  prefs: Prefs
+  storage: StorageStatus
+  version: string
+  platform: string
+  launch: LaunchState
+  days: { date: string; activeMs: number; onMs: number }[]
+}
+
 export interface VideoExportResult {
   ok: boolean
   path?: string
@@ -207,13 +233,8 @@ export interface Bridge {
   appDetailOpened: (cb: (key: string) => void) => () => void
   snapshot: (cb: (s: LiveSnapshot) => void) => () => void
   onUsageUpdated: (cb: (d: DashboardData) => void) => () => void
-  getSettingsData: () => Promise<{
-    prefs: Prefs
-    storage: StorageStatus
-    version: string
-    platform: string
-    days: { date: string; activeMs: number; onMs: number }[]
-  }>
+  getSettingsData: () => Promise<SettingsPayload>
+  repairLaunch: () => Promise<LaunchState>
   setPref: (key: string, value: string | number | boolean) => Promise<Prefs>
   exportJson: () => Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }>
   clearData: () => Promise<{ ok: boolean; error?: string }>

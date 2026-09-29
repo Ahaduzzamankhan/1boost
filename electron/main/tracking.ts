@@ -45,6 +45,8 @@ const WAKE_BURST_MS = 10_000
 const MAX_ACCOUNTED_GAP_MS = 60_000
 const SAVE_DEBOUNCE_MS = 3_000
 const SAVE_MAX_WAIT_MS = 60_000
+/** Periodic safety save so a crash never loses more than ~30 min of data. */
+const SAFETY_SAVE_MS = 30 * 60_000
 const UI_PUSH_MS = 2_000
 const SNAPSHOT_PUSH_MS = 1_000
 
@@ -62,6 +64,7 @@ export class Tracker {
   private saveTimer: NodeJS.Timeout | null = null
   private maxWaitTimer: NodeJS.Timeout | null = null
   private uiTimer: NodeJS.Timeout | null = null
+  private safetyTimer: NodeJS.Timeout | null = null
 
   private prevSample: BoostSample | null = null
   private lastApplyMs: number | null = null
@@ -105,14 +108,15 @@ export class Tracker {
     this.eventTimer = setInterval(() => this.pumpEvents(), EVENT_POLL_MS)
     this.sampleTimer = setInterval(() => void this.sample(), SAMPLE_MS)
     this.uiTimer = setInterval(() => this.pushUi(), 500)
+    this.safetyTimer = setInterval(() => this.safetySave(), SAFETY_SAVE_MS)
   }
 
   stop(): void {
     this.stopped = true
-    for (const t of [this.sampleTimer, this.eventTimer, this.saveTimer, this.maxWaitTimer, this.uiTimer]) {
+    for (const t of [this.sampleTimer, this.eventTimer, this.saveTimer, this.maxWaitTimer, this.uiTimer, this.safetyTimer]) {
       if (t) clearInterval(t)
     }
-    this.sampleTimer = this.eventTimer = this.saveTimer = this.maxWaitTimer = this.uiTimer = null
+    this.sampleTimer = this.eventTimer = this.saveTimer = this.maxWaitTimer = this.uiTimer = this.safetyTimer = null
     this.finalizeBeforeExit()
     nativeShutdown()
   }
@@ -269,7 +273,9 @@ export class Tracker {
         this.closeCurrentSession(now, reason)
         this.prevSample = null
         this.lastApplyMs = null
-        this.flushSave()
+        // Windows may suspend or kill the process immediately after these
+        // events: persist synchronously so the data actually reaches disk.
+        this.criticalSave()
         break
       }
       case 'resume': {
@@ -281,7 +287,7 @@ export class Tracker {
       }
       case 'lock': {
         this.closeCurrentSession(now, 'lock')
-        this.flushSave()
+        this.criticalSave()
         break
       }
       case 'unlock': {
@@ -331,8 +337,15 @@ export class Tracker {
       paused: this.prefs.pauseTracking,
       currentApp: this.current ? { key: this.current.key, name: this.current.name, startMs: this.current.startMs } : null,
       battery: this.batteryState(),
+      batteryRemainingMin: this.batteryRemainingMin(),
       lastError: this.lastError,
     })
+  }
+
+  private batteryRemainingMin(): number | null {
+    const s = this.prevSample
+    if (!s || s.batteryRemainingMin < 0) return null
+    return s.batteryRemainingMin
   }
 
   dashboard(): DashboardData {
@@ -342,6 +355,7 @@ export class Tracker {
       paused: this.prefs.pauseTracking,
       currentApp: this.current ? { key: this.current.key, name: this.current.name, startMs: this.current.startMs } : null,
       battery: this.batteryState(),
+      batteryRemainingMin: this.batteryRemainingMin(),
       lastError: this.lastError,
       appNames: this.namesMap(),
       icons: this.icons,
@@ -400,8 +414,32 @@ export class Tracker {
     }
   }
 
-  private flushSave(): void {
-    void this.saveNow()
+  /**
+   * Synchronous save for suspend/shutdown/lock: async writes can be cut off
+   * when Windows suspends or kills the process, losing recent history.
+   */
+  private criticalSave(): void {
+    if (this.saveTimer) clearTimeout(this.saveTimer)
+    if (this.maxWaitTimer) clearTimeout(this.maxWaitTimer)
+    this.saveTimer = this.maxWaitTimer = null
+    try {
+      this.storage.saveDataSync()
+      this.dirty = false
+    } catch (e) {
+      this.lastError = 'Failed to write usage data: ' + String(e)
+    }
+  }
+
+  /** Periodic sync safety save — bounds worst-case data loss to SAFETY_SAVE_MS. */
+  private safetySave(): void {
+    if (this.stopped) return
+    if (!this.dirty) return
+    try {
+      this.storage.saveDataSync()
+      this.dirty = false
+    } catch {
+      /* retried on the next dirty flush */
+    }
   }
 
   private finalizeBeforeExit(): void {

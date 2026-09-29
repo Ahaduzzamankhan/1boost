@@ -59,11 +59,12 @@ function fn(name: keyof typeof FN_DEFS) {
 }
 
 // ---- layout constants (must match Rust tests) ------------------------------
-// BoostSampleResult: 584 bytes; BoostEventData: 24 bytes; BoostPumpResult: 32 bytes.
+// BoostSampleResult: 592 bytes; BoostEventData: 24 bytes; BoostPumpResult: 32 bytes.
 // Offsets: uptime_ms=0 u64, now_epoch_ms=8 u64, ok=16 i32, foreground_ok=20 i32,
 // has_window=24 i32, screen_on=28 i32, console_locked=32 i32, active_session=36 i32,
 // input_active=40 i32, idle_ms=44 u32, ac_online=48 i32, battery_pct=52 u8,
-// battery_flag=53 u8, fg.process_name=56 [u16;260], fg.process_id=576 u32.
+// battery_flag=53 u8, fg.process_name=56 [u16;260], fg.process_id=576 u32,
+// is_fullscreen=580 i32, battery_remaining_min=584 i32.
 const S = {
   uptimeMs: 0,
   nowEpochMs: 8,
@@ -80,8 +81,10 @@ const S = {
   batteryFlag: 53,
   fgName: 56,
   fgPid: 576,
+  isFullscreen: 580,
+  batteryRemainingMin: 584,
 }
-const S_SIZE = 584
+const S_SIZE = 592
 const E_SIZE = 24
 const P_SIZE = 32
 const MAX_EVENTS = 64
@@ -129,6 +132,8 @@ export function nativeCollectOnce(idleThresholdMs: number): BoostSample {
     nowEpochMs: Number(dv.getBigUint64(S.nowEpochMs, true)),
     processId: dv.getUint32(S.fgPid, true),
     processName: readUtf16(out, S.fgName, 260),
+    isFullscreen: dv.getInt32(S.isFullscreen, true) === 1,
+    batteryRemainingMin: dv.getInt32(S.batteryRemainingMin, true),
   }
 }
 

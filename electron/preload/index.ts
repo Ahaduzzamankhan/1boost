@@ -29,6 +29,7 @@ const api = {
     return () => ipcRenderer.removeListener('oneboost:usage-updated', h)
   },
   getSettingsData: () => ipcRenderer.invoke('oneboost:get-settings-data'),
+  repairLaunch: () => ipcRenderer.invoke('oneboost:repair-launch'),
   setPref: (key: string, value: string | number | boolean) =>
     ipcRenderer.invoke('oneboost:set-pref', key, value),
   exportJson: () => ipcRenderer.invoke('oneboost:export-json'),

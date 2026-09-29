@@ -17,6 +17,21 @@ locally on your device.
   tracking, idle threshold, history retention, data export/delete, and reduced
   motion.
 
+### New in v1.1.0
+
+- **Durable history** — every save is followed by rolling backups
+  (`usage-data.json.bak0–2`); if the data file is ever damaged, 1Boost restores
+  the newest good backup automatically instead of starting over. Sleep, lock
+  and shutdown now persist synchronously so Windows can't cut the write off.
+- **Reliable auto-start** — the launch-at-login entry is re-asserted on every
+  app start (repairing stale paths after updates) and Settings shows live
+  Windows status with a one-click **Fix now** repair action.
+- **Fullscreen focus tracking (Rust)** — the native layer detects when the
+  foreground window covers its monitor (games, films) and the dashboard shows
+  your fullscreen focus time for the day.
+- **Battery estimate** — the dashboard shows remaining battery time reported
+  by Windows while unplugged.
+
 ## How tracking works
 
 1Boost pairs a tiny **Rust native layer** (`electron/native`) with an Electron
@@ -32,8 +47,8 @@ main-process orchestrator:
 - **Uptime-gap analysis** catches suspends even if a broadcast is missed, and
   unaccounted gaps are never counted as usage.
 
-Data lives in `%APPDATA%/1Boost/usage-data.json` (atomic writes, automatic
-corruption recovery). Nothing ever leaves your machine.
+Data lives in `%APPDATA%/1Boost/usage-data.json` (atomic writes, rolling
+backups, automatic corruption recovery). Nothing ever leaves your machine.
 
 ## Development
 
@@ -54,6 +69,17 @@ to pick it up.
 - `node scripts/make-icons.js` — regenerate `resources/icons/*.ico`
 - `node scripts/cdp.mjs '<js>' [--console]` — evaluate JS in the running app
   (start it first with `npx electron . --remote-debugging-port=9222`)
+
+## Releasing
+
+Releases are automated with GitHub Actions (`.github/workflows/release.yml`):
+
+1. Bump `version` in `package.json`.
+2. Commit and tag: `git tag v1.2.0 && git push origin v1.2.0`.
+3. The workflow runs TS + Rust tests, builds the Rust layer, packs the NSIS
+   installer and publishes a GitHub Release with `1Boost-Setup-<version>.exe`.
+
+The tag must match the `package.json` version (the workflow verifies it).
 
 ## Privacy
 
