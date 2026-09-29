@@ -137,29 +137,41 @@ function pngSize(buf) {
   return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) }
 }
 
-/**
- * Largest usable PNG in the root `icons/` folder (official artwork).
- * Prefers a square image; falls back to the largest file of any shape.
- */
-function officialPng() {
+let officialCache
+/** All usable PNGs in the root `icons/` folder (official artwork). */
+function officialPngs() {
+  if (officialCache) return officialCache
   try {
-    const files = readdirSync(officialDir)
+    officialCache = readdirSync(officialDir)
       .filter((f) => f.toLowerCase().endsWith('.png'))
       .map((f) => {
-        const p = join(officialDir, f)
-        const buf = readFileSync(p)
+        const buf = readFileSync(join(officialDir, f))
         const size = pngSize(buf)
-        if (!size || size.w < 64) return null
-        return { p, buf, ...size, area: size.w * size.h }
+        if (!size || size.w < 16 || size.h < 16) return null
+        return { name: f, buf, ...size }
       })
       .filter(Boolean)
-    if (files.length === 0) return null
-    files.sort((a, b) => b.area - a.area)
-    const square = files.find((f) => f.w === f.h)
-    return square ?? files[0]
   } catch {
-    return null
+    officialCache = []
   }
+  return officialCache
+}
+
+/**
+ * Best official PNG for a target icon size: the smallest available image
+ * that is >= target (clean downscale, never upscale); the largest image
+ * when none is big enough. Files named "icon-<size>x<size>.png" win ties
+ * so a curated set is preferred over arbitrary uploads.
+ */
+function officialPngFor(target) {
+  const files = officialPngs()
+  if (files.length === 0) return null
+  const exactName = files.find((f) => f.name.toLowerCase() === `icon-${target}x${target}.png`)
+  if (exactName && exactName.w === target) return exactName
+  const bigEnough = files.filter((f) => f.w >= target && f.h >= target)
+  const pool = bigEnough.length > 0 ? bigEnough : files
+  pool.sort((a, b) => a.w * a.h - b.w * b.h)
+  return bigEnough.length > 0 ? pool[0] : pool[pool.length - 1]
 }
 
 // ---------- ICO container ----------
@@ -192,12 +204,12 @@ function icoFromSources(sources) {
   return Buffer.concat([header, ...dirs, ...entries.map(([, d]) => d)])
 }
 
-const official = officialPng()
-if (official) {
-  const art = official.buf
-  writeFileSync(join(outDir, 'icon.ico'), icoFromSources(new Map([[256, art]])))
-  writeFileSync(join(outDir, 'tray.ico'), icoFromSources(new Map([[32, art]])))
-  console.log(`[icons] using official PNG (${official.w}x${official.h}) -> icon.ico + tray.ico`)
+const iconArt = officialPngFor(256)
+const trayArt = officialPngFor(32)
+if (iconArt && trayArt) {
+  writeFileSync(join(outDir, 'icon.ico'), icoFromSources(new Map([[256, iconArt.buf]])))
+  writeFileSync(join(outDir, 'tray.ico'), icoFromSources(new Map([[32, trayArt.buf]])))
+  console.log(`[icons] official PNGs: app ${iconArt.name} (${iconArt.w}px), tray ${trayArt.name} (${trayArt.w}px)`)
 } else {
   writeFileSync(join(outDir, 'icon.ico'), icoFromSources(new Map([
     [256, pngFor(256)],
