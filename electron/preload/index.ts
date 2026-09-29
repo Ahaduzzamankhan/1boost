@@ -1,7 +1,7 @@
 // Preload bridge: minimal typed IPC surface for the renderer.
 
 import { contextBridge, ipcRenderer } from 'electron'
-import type { Bridge, DashboardData, LiveSnapshot, PageId, Prefs } from '../../shared/types'
+import type { Bridge, DashboardData, LiveSnapshot, PageId, Prefs, UpdateState } from '../../shared/types'
 
 const api = {
   getInitial: () => ipcRenderer.invoke('oneboost:get-initial'),
@@ -30,6 +30,14 @@ const api = {
   },
   getSettingsData: () => ipcRenderer.invoke('oneboost:get-settings-data'),
   repairLaunch: () => ipcRenderer.invoke('oneboost:repair-launch'),
+  getUpdateState: () => ipcRenderer.invoke('oneboost:update-state'),
+  checkForUpdates: () => ipcRenderer.invoke('oneboost:update-check'),
+  installUpdate: () => ipcRenderer.invoke('oneboost:update-install'),
+  onUpdateState: (cb: (s: UpdateState) => void) => {
+    const h = (_e: unknown, s: UpdateState) => cb(s)
+    ipcRenderer.on('oneboost:update-state', h)
+    return () => ipcRenderer.removeListener('oneboost:update-state', h)
+  },
   setPref: (key: string, value: string | number | boolean) =>
     ipcRenderer.invoke('oneboost:set-pref', key, value),
   exportJson: () => ipcRenderer.invoke('oneboost:export-json'),

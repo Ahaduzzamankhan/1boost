@@ -138,6 +138,18 @@ function createBrowserHarnessBridge(): Bridge {
       needsRepair: false,
       registeredPath: null,
     }),
+    getUpdateState: async () => ({
+      status: 'up-to-date' as const,
+      currentVersion: '1.1.1',
+      checkedAt: Date.now(),
+    }),
+    checkForUpdates: async () => ({
+      status: 'up-to-date' as const,
+      currentVersion: '1.1.1',
+      checkedAt: Date.now(),
+    }),
+    installUpdate: async () => false,
+    onUpdateState: () => () => undefined,
     setPref: async (key, value) => {
       ;(prefs as unknown as Record<string, unknown>)[key] = value
       return prefs

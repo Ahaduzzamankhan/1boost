@@ -1151,6 +1151,16 @@ kbd {
   color: var(--text-secondary);
 }
 
+/* Spinner for in-flight actions */
+.spin {
+  animation: spin 900ms linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 /* Reduced motion */
 :root[data-reduced-motion='true'] *,
 :root[data-reduced-motion='true'] *::before,

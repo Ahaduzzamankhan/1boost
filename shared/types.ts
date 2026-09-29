@@ -217,6 +217,25 @@ export interface VideoExportResult {
   error?: string
 }
 
+/** Auto-update lifecycle as surfaced in Settings. */
+export type UpdateStatus = 'idle' | 'checking' | 'downloading' | 'ready' | 'up-to-date' | 'error'
+
+export interface UpdateState {
+  status: UpdateStatus
+  /** Version currently running. */
+  currentVersion: string
+  /** Newer version being downloaded / downloaded, when one exists. */
+  availableVersion?: string | null
+  /** Download progress 0..100 while status is 'downloading'. */
+  progress?: number
+  downloadedBytes?: number
+  totalBytes?: number
+  /** Set when status is 'error'. */
+  error?: string | null
+  /** Epoch ms of the last completed check. */
+  checkedAt?: number
+}
+
 export interface Bridge {
   getInitial: () => Promise<{
     prefs: Prefs
@@ -235,6 +254,10 @@ export interface Bridge {
   onUsageUpdated: (cb: (d: DashboardData) => void) => () => void
   getSettingsData: () => Promise<SettingsPayload>
   repairLaunch: () => Promise<LaunchState>
+  getUpdateState: () => Promise<UpdateState>
+  checkForUpdates: () => Promise<UpdateState>
+  installUpdate: () => Promise<boolean>
+  onUpdateState: (cb: (s: UpdateState) => void) => () => void
   setPref: (key: string, value: string | number | boolean) => Promise<Prefs>
   exportJson: () => Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }>
   clearData: () => Promise<{ ok: boolean; error?: string }>

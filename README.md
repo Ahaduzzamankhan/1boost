@@ -17,6 +17,16 @@ locally on your device.
   tracking, idle threshold, history retention, data export/delete, and reduced
   motion.
 
+### New in v1.1.1
+
+- **Automatic updates** — 1Boost checks GitHub Releases in the background,
+  downloads new versions automatically, and asks before restarting to install
+  (**Settings → Updates**, with a manual *Check for updates* action and live
+  download progress).
+- **Fixed startup status** — the "Launch at Windows startup" status now reads
+  the actual Windows Run key, so it reports the truth (and "Fix now" repairs
+  it) instead of showing a false "Windows is not starting 1Boost yet".
+
 ### New in v1.1.0
 
 - **Durable history** — every save is followed by rolling backups
@@ -78,6 +88,10 @@ Releases are automated with GitHub Actions (`.github/workflows/release.yml`):
 2. Commit and tag: `git tag v1.2.0 && git push origin v1.2.0`.
 3. The workflow runs TS + Rust tests, builds the Rust layer, packs the NSIS
    installer and publishes a GitHub Release with `1Boost-Setup-<version>.exe`.
+
+Installed apps auto-update from the same Releases feed via electron-updater
+(publishes `latest.yml` + blockmap alongside the installer). Release drafts are
+created by CI and published automatically after the run.
 
 The tag must match the `package.json` version (the workflow verifies it).
 

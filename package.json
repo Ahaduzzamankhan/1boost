@@ -1,7 +1,7 @@
 {
   "name": "1boost",
   "productName": "1Boost",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "1Boost — PC usage analytics for Windows",
   "author": "1Boost",
   "license": "MIT",
@@ -27,19 +27,25 @@
       {
         "from": "resources/native",
         "to": "native",
-        "filter": ["**/*.dll"]
+        "filter": [
+          "**/*.dll"
+        ]
       },
       {
         "from": "resources/icons",
         "to": "icons",
-        "filter": ["*.ico"]
+        "filter": [
+          "*.ico"
+        ]
       }
     ],
     "win": {
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "resources/icons/icon.ico",
@@ -52,6 +58,11 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "1Boost"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "Ahaduzzamankhan",
+      "repo": "1boost"
     }
   },
   "scripts": {
@@ -70,6 +81,7 @@
     "rust:test": "cargo test --release --manifest-path electron/native/Cargo.toml"
   },
   "dependencies": {
+    "electron-updater": "^6.8.9",
     "koffi": "^3.3.2"
   },
   "devDependencies": {

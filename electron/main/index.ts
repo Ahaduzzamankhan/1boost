@@ -13,6 +13,7 @@ import type {
 import { Tracker } from './tracking'
 import { Storage, sanitizePrefs } from './storage'
 import { getLaunchAtLoginState, setLaunchAtLogin, syncLaunchAtLogin, type LaunchState } from './settings'
+import { initUpdater, registerUpdaterIpc } from './updater'
 import {
   createMainWindow,
   createTray,
@@ -57,9 +58,21 @@ function bootstrap(): void {
     // entries after updates and re-enables startup if Windows dropped it.
     // (Skipped in unpackaged dev runs so we never register electron.exe.)
     if (app.isPackaged || !storage.settings.prefs.launchAtLogin) {
-      launchState = syncLaunchAtLogin(storage.settings.prefs)
+      syncLaunchAtLogin(storage.settings.prefs)
+        .then((s) => {
+          launchState = s
+        })
+        .catch(() => {
+          /* probed again on demand by the Settings page */
+        })
     } else {
-      launchState = getLaunchAtLoginState(storage.settings.prefs)
+      getLaunchAtLoginState(storage.settings.prefs)
+        .then((s) => {
+          launchState = s
+        })
+        .catch(() => {
+          /* probed again on demand */
+        })
     }
 
     // Native tracking layer + orchestrator.
@@ -86,6 +99,8 @@ function bootstrap(): void {
 
     registerIpc()
     registerPowerMonitor()
+    registerUpdaterIpc()
+    initUpdater()
 
     app.on('activate', () => showMainWindow())
   })
@@ -128,7 +143,9 @@ function applyPrefInternal(key: keyof Prefs, value: Prefs[keyof Prefs]): void {
   }
   if (key === 'launchAtLogin' || key === 'startMinimized') {
     setLaunchAtLogin(next.launchAtLogin, next.startMinimized)
-    launchState = getLaunchAtLoginState(next)
+    void getLaunchAtLoginState(next).then((s) => {
+      launchState = s
+    })
   }
   if (key === 'showTray') {
     if (!next.showTray) destroyTray()
@@ -170,12 +187,13 @@ function registerIpc(): void {
   ipcMain.handle('oneboost:get-dashboard', async () => tracker!.dashboard())
   ipcMain.handle('oneboost:get-settings-data', async () => {
     const prefs = storage!.settings.prefs
+    const launch = launchState ?? (await getLaunchAtLoginState(prefs))
     return {
       prefs,
       storage: storage!.status(),
       version: app.getVersion(),
       platform: process.platform,
-      launch: launchState ?? getLaunchAtLoginState(prefs),
+      launch,
       days: tracker!.historyDays(90).map((d) => ({ date: d.date, activeMs: d.activeMs, onMs: d.pcOnMs })),
     }
   })
@@ -183,7 +201,7 @@ function registerIpc(): void {
   ipcMain.handle('oneboost:repair-launch', async () => {
     const prefs = storage!.settings.prefs
     setLaunchAtLogin(prefs.launchAtLogin, prefs.startMinimized)
-    launchState = getLaunchAtLoginState(prefs)
+    launchState = await getLaunchAtLoginState(prefs)
     return launchState
   })
 

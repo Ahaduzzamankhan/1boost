@@ -12,8 +12,11 @@ import {
   FolderOpen,
   Wrench,
   AlertCircle,
+  RefreshCw,
+  RotateCcw,
+  CheckCircle2,
 } from 'lucide-react'
-import type { AccentId, LaunchState, Prefs, ThemeId } from '../../shared/types'
+import type { AccentId, LaunchState, Prefs, ThemeId, UpdateState } from '../../shared/types'
 import { bridge, ACCENT_HEX } from '../bridge'
 import { Slider, Toggle } from '../components/ui'
 
@@ -73,6 +76,8 @@ export default function SettingsPage({
   const [exporting, setExporting] = useState(false)
   const [launch, setLaunch] = useState<LaunchState | null>(null)
   const [repairing, setRepairing] = useState(false)
+  const [update, setUpdate] = useState<UpdateState | null>(null)
+  const [checking, setChecking] = useState(false)
 
   const refreshLaunch = useCallback(async () => {
     try {
@@ -94,6 +99,31 @@ export default function SettingsPage({
       setLaunch(state)
     } finally {
       setRepairing(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    let alive = true
+    bridge
+      .getUpdateState()
+      .then((s) => alive && setUpdate(s))
+      .catch(() => {})
+    const off = bridge.onUpdateState((s) => {
+      if (alive) setUpdate(s)
+    })
+    return () => {
+      alive = false
+      off()
+    }
+  }, [])
+
+  const runUpdateCheck = useCallback(async () => {
+    setChecking(true)
+    try {
+      const s = await bridge.checkForUpdates()
+      setUpdate(s)
+    } finally {
+      setChecking(false)
     }
   }, [])
 
@@ -345,6 +375,61 @@ export default function SettingsPage({
                 <Trash2 size={15} /> Delete…
               </button>
             )}
+          </div>
+        </div>
+      </section>
+
+      {/* Updates */}
+      <section className="settings-section">
+        <div className="section-title" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <RefreshCw size={18} /> Updates
+        </div>
+        <div className="card">
+          <div className="setting-row">
+            <div className="setting-info">
+              <div className="setting-title">
+                1Boost v{update?.currentVersion ?? version}
+              </div>
+              <div className="setting-desc">
+                {update?.status === 'checking'
+                  ? 'Checking for updates…'
+                  : update?.status === 'downloading'
+                    ? `Downloading ${update.availableVersion ?? 'update'}… ${update.progress ?? 0}%`
+                    : update?.status === 'ready'
+                      ? `Version ${update.availableVersion ?? ''} is ready to install.`
+                      : update?.status === 'error'
+                        ? `Update check failed: ${update.error ?? 'unknown error'}`
+                        : 'You are on the latest version.'}
+              </div>
+              {update?.status === 'downloading' ? (
+                <div className="bar" style={{ marginTop: 8, maxWidth: 320 }}>
+                  <div style={{ width: `${update.progress ?? 0}%` }} />
+                </div>
+              ) : null}
+            </div>
+            {update?.status === 'ready' ? (
+              <button className="btn btn-primary" onClick={() => void bridge.installUpdate()}>
+                <RotateCcw size={15} /> Restart to update
+              </button>
+            ) : (
+              <button className="btn btn-secondary" onClick={() => void runUpdateCheck()} disabled={checking || update?.status === 'downloading'}>
+                {checking ? <RefreshCw size={15} className="spin" /> : <Download size={15} />}
+                {checking ? 'Checking…' : 'Check for updates'}
+              </button>
+            )}
+          </div>
+          <div className="setting-row">
+            <div className="setting-info">
+              <div className="setting-title">Automatic updates</div>
+              <div className="setting-desc">
+                New releases are downloaded in the background from GitHub. 1Boost asks before restarting to install.
+              </div>
+            </div>
+            {update?.status === 'up-to-date' ? (
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--text-secondary)' }}>
+                <CheckCircle2 size={15} color="#22c55e" /> Enabled
+              </span>
+            ) : null}
           </div>
         </div>
       </section>
