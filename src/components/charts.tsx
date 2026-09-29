@@ -2,6 +2,12 @@ import { useMemo, useRef, useState } from 'react'
 import { formatDuration, formatDurationLong, formatDayLabel } from '../lib/format'
 import type { TrendPoint } from '../../shared/types'
 
+/** One live-history point: an indexed tick plus the current value. */
+export interface LivePoint {
+  t: number
+  v: number | null
+}
+
 interface Tooltip {
   x: number
   y: number
@@ -269,6 +275,149 @@ export function DailyBars({ points, height = 190 }: { points: TrendPoint[]; heig
               </text>
             ))
           : null}
+      </svg>
+      <TooltipEl tip={tip} />
+    </div>
+  )
+}
+
+/**
+ * Live area chart for the Monitor page. Takes a fixed-capacity history array
+ * (oldest first, `null` = unavailable) and renders it without any internal
+ * state — the owner keeps exactly one history per metric and re-renders on
+ * each push, so history can never grow unbounded.
+ */
+export function LiveAreaChart({
+  points,
+  max,
+  height = 96,
+  formatValue,
+  ariaLabel,
+}: {
+  points: LivePoint[]
+  /** Fixed y-axis maximum (e.g. 100 for %). When omitted the axis scales to
+   *  the data (never below the largest value, never below 1). */
+  max?: number
+  height?: number
+  formatValue: (v: number) => string
+  ariaLabel: string
+}) {
+  const { tip, show, hide } = useTooltip()
+  const W = 600
+  const H = height
+  const PADX = 2
+  const PADT = 6
+  const PADB = 4
+  const innerW = W - PADX * 2
+  const innerH = H - PADT - PADB
+
+  const cap = Math.max(points.length, 1)
+  const dataMax = useMemo(() => {
+    let m = 1
+    for (const p of points) {
+      if (p.v != null && p.v > m) m = p.v
+    }
+    return m
+  }, [points])
+  const yMax = max != null ? max : dataMax
+
+  const x = (i: number) => PADX + (cap <= 1 ? innerW / 2 : (i / (cap - 1)) * innerW)
+  const y = (v: number) => PADT + innerH - (Math.max(0, v) / yMax) * innerH
+
+  // Build path segments, breaking at null (unavailable) values; each segment
+  // remembers its first/last index so its area fill closes correctly.
+  const segments = useMemo(() => {
+    const segs: { d: string; start: number; end: number }[] = []
+    let cur = ''
+    let start = -1
+    let last = -1
+    points.forEach((p, i) => {
+      if (p.v == null) {
+        if (start >= 0) segs.push({ d: cur, start, end: last })
+        cur = ''
+        start = -1
+        return
+      }
+      if (start < 0) start = i
+      last = i
+      const cmd = cur === '' ? 'M' : 'L'
+      cur += `${cmd} ${x(i)} ${y(p.v)}`
+    })
+    if (start >= 0) segs.push({ d: cur, start, end: last })
+    return segs
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [points, yMax, cap])
+
+  const lastIdx = points.length > 0 ? segments.length > 0 ? segments[segments.length - 1].end : -1 : -1
+  const hasData = segments.length > 0
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        style={{ width: '100%', height: 'auto', display: 'block' }}
+        onMouseLeave={hide}
+        role="img"
+        aria-label={ariaLabel}
+      >
+        <defs>
+          <linearGradient id="liveFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.3" />
+            <stop offset="100%" stopColor="var(--accent)" stopOpacity="0.03" />
+          </linearGradient>
+        </defs>
+        {hasData ? (
+          <>
+            {segments.map((s, si) => (
+              <path
+                key={`a${si}`}
+                d={`${s.d} L ${x(s.end)} ${PADT + innerH} L ${x(s.start)} ${PADT + innerH} Z`}
+                fill="url(#liveFill)"
+                stroke="none"
+              />
+            ))}
+            {segments.map((s, si) => (
+              <path
+                key={`l${si}`}
+                d={s.d}
+                fill="none"
+                stroke="var(--accent)"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            ))}
+            <circle cx={x(lastIdx)} cy={y(points[lastIdx].v as number)} r="2.6" fill="var(--accent)" />
+          </>
+        ) : (
+          <line
+            x1={PADX}
+            x2={W - PADX}
+            y1={PADT + innerH}
+            y2={PADT + innerH}
+            stroke="var(--border)"
+            strokeDasharray="3 4"
+          />
+        )}
+        <rect
+          x={0}
+          y={0}
+          width={W}
+          height={H}
+          fill="transparent"
+          onMouseMove={(e) => {
+            const rect = (e.currentTarget as SVGRectElement).getBoundingClientRect()
+            const rel = (e.clientX - rect.left) / rect.width
+            const idx = Math.min(cap - 1, Math.max(0, Math.round(rel * (cap - 1))))
+            const p = points[idx]
+            show({
+              x: e.clientX,
+              y: e.clientY,
+              title: `t−${cap - 1 - idx} sample${cap - 1 - idx === 1 ? '' : 's'}`,
+              value: p?.v == null ? 'unavailable' : formatValue(p.v),
+            })
+          }}
+        />
       </svg>
       <TooltipEl tip={tip} />
     </div>

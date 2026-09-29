@@ -16,6 +16,27 @@ locally on your device.
   AMOLED), 8 accent colors, transparency slider, launch-at-startup, pause
   tracking, idle threshold, history retention, data export/delete, and reduced
   motion.
+- **Monitor** (v1.1.3) — live CPU, memory, GPU, disk and network dashboards
+  with real-time graphs, temperatures where the hardware exposes them, and
+  per-drive storage bars.
+
+### New in v1.1.3
+
+- **System monitoring** — a new Monitor page shows CPU usage, RAM, GPU,
+  disk activity (read/write speeds), and network throughput, each with a
+  real-time graph of the last ~2 minutes. Temperatures appear when the
+  hardware exposes a sensor and are shown as unavailable otherwise — never
+  guessed.
+- **Native Rust monitoring layer** — all sampling happens in
+  `oneboost_native.dll` via Windows performance APIs (PDH, GetSystemTimes,
+  GetIfTable), exposed through one compact FFI snapshot. The renderer never
+  polls: the main process pushes one IPC update every 2 s while the Monitor
+  page is open, and the poll timer stops entirely when nobody is listening.
+- **UI polish** — rounded corners normalized onto the design-token radii
+  across surfaces, and a dedicated two-column monitor card grid that adapts
+  to narrow windows.
+- Bug fixes: the browser preview harness reported stale hard-coded versions
+  ('1.0.0' / '1.1.1'); it now tracks the real app version.
 
 ### New in v1.1.2
 

@@ -1,6 +1,7 @@
 import { ReactNode, useEffect, useState } from 'react'
 import {
   LayoutDashboard,
+  Activity,
   Grid2X2,
   ChartNoAxesCombined,
   History as HistoryIcon,
@@ -20,6 +21,7 @@ async function setPrefBridge(key: keyof Prefs, value: string | number | boolean)
   await bridge.setPref(key, value)
 }
 import DashboardPage from '../pages/DashboardPage'
+import MonitorPage from '../pages/MonitorPage'
 import AppsPage from '../pages/AppsPage'
 import StatsPage from '../pages/StatsPage'
 import HistoryPage from '../pages/HistoryPage'
@@ -27,6 +29,7 @@ import SettingsPage from '../pages/SettingsPage'
 
 const NAV: { id: PageId; label: string; icon: ReactNode }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard size={19} /> },
+  { id: 'monitor', label: 'Monitor', icon: <Activity size={19} /> },
   { id: 'apps', label: 'Applications', icon: <Grid2X2 size={19} /> },
   { id: 'stats', label: 'Statistics', icon: <ChartNoAxesCombined size={19} /> },
   { id: 'history', label: 'History', icon: <HistoryIcon size={19} /> },
@@ -166,6 +169,7 @@ export default function AppShell({
         </aside>
         <main className="content" id="main-content">
           {page === 'dashboard' && <DashboardPage />}
+          {page === 'monitor' && <MonitorPage />}
           {page === 'apps' && <AppsPage />}
           {page === 'stats' && <StatsPage />}
           {page === 'history' && <HistoryPage />}

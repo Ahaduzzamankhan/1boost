@@ -1,11 +1,13 @@
 //! 1Boost native tracking layer (Windows).
 //!
-//! Exposes five FFI entry points used by the Electron main process:
+//! Exposes seven FFI entry points used by the Electron main process:
 //!  - `oneboost_start`          : spawn the event pump thread (hidden message window)
 //!  - `oneboost_shutdown`       : stop the pump thread cleanly
 //!  - `oneboost_collect_once`   : one tracking sample (foreground app + input + power state)
 //!  - `oneboost_pump_events`    : drain Win32 power / session / display events
 //!  - `oneboost_get_idle_state` : GetLastInputInfo-derived idle probe
+//!  - `oneboost_monitor_sample` : one system-monitoring snapshot (see `monitor`)
+//!  - `oneboost_monitor_shutdown` : release monitoring resources
 //!
 //! The pump thread owns a hidden top-level window so it receives WM_POWERBROADCAST
 //! broadcasts (sleep/resume), a registered power-setting notification (monitor on/off)
@@ -16,6 +18,8 @@
 
 #![cfg(windows)]
 #![allow(non_snake_case)]
+
+mod monitor;
 
 use std::collections::VecDeque;
 use std::ffi::c_void;
@@ -205,14 +209,14 @@ pub struct BoostIdleResult {
 // Small helpers
 // ---------------------------------------------------------------------------
 
-fn now_epoch_ms() -> u64 {
+pub(crate) fn now_epoch_ms() -> u64 {
     match SystemTime::now().duration_since(UNIX_EPOCH) {
         Ok(d) => d.as_millis() as u64,
         Err(_) => 0, // pre-epoch clock skew; not a realistic tracking scenario
     }
 }
 
-fn uptime_ms() -> u64 {
+pub(crate) fn uptime_ms() -> u64 {
     unsafe { GetTickCount64() }
 }
 

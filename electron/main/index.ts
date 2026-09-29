@@ -12,6 +12,7 @@ import type {
 } from '../../shared/types'
 import { Tracker } from './tracking'
 import { Storage, sanitizePrefs } from './storage'
+import { Monitor } from './monitor'
 import { getLaunchAtLoginState, setLaunchAtLogin, syncLaunchAtLogin, type LaunchState } from './settings'
 import { initUpdater, registerUpdaterIpc } from './updater'
 import {
@@ -26,10 +27,11 @@ import {
   updateTrayMenu,
 } from './window'
 
-const PAGES: PageId[] = ['dashboard', 'apps', 'stats', 'history', 'settings']
+const PAGES: PageId[] = ['dashboard', 'monitor', 'apps', 'stats', 'history', 'settings']
 
 let storage: Storage | null = null
 let tracker: Tracker | null = null
+let monitor: Monitor | null = null
 let launchState: LaunchState | null = null
 
 const gotLock = app.requestSingleInstanceLock()
@@ -79,6 +81,11 @@ function bootstrap(): void {
     tracker = new Tracker(storage)
     wireTracker()
     tracker.start()
+
+    // System monitoring (Rust-backed). The poll timer starts on first
+    // renderer subscription and auto-stops after an idle linger window.
+    monitor = new Monitor()
+    monitor.registerIpc()
 
     // Window + tray.
     setWindowHooks({
@@ -318,4 +325,5 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   tracker?.stop()
+  monitor?.stop()
 })

@@ -1,11 +1,25 @@
 // Preload bridge: minimal typed IPC surface for the renderer.
 
 import { contextBridge, ipcRenderer } from 'electron'
-import type { Bridge, DashboardData, LiveSnapshot, PageId, Prefs, UpdateState } from '../../shared/types'
+import type {
+  Bridge,
+  DashboardData,
+  LiveSnapshot,
+  MonitorSample,
+  PageId,
+  Prefs,
+  UpdateState,
+} from '../../shared/types'
 
 const api = {
   getInitial: () => ipcRenderer.invoke('oneboost:get-initial'),
   getDashboard: () => ipcRenderer.invoke('oneboost:get-dashboard'),
+  getMonitorSample: () => ipcRenderer.invoke('oneboost:get-monitor'),
+  monitor: (cb: (s: MonitorSample) => void) => {
+    const h = (_e: unknown, s: MonitorSample) => cb(s)
+    ipcRenderer.on('oneboost:monitor', h)
+    return () => ipcRenderer.removeListener('oneboost:monitor', h)
+  },
   navigate: (page: PageId) => ipcRenderer.send('oneboost:navigate', page),
   openAppDetail: (key: string) => ipcRenderer.send('oneboost:open-app-detail', key),
   pageChanged: (cb: (page: PageId) => void) => {

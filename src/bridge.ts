@@ -1,5 +1,8 @@
 import type { Bridge, PageId, Prefs } from '../shared/types'
 
+/** Browser-harness only: matches package.json so About/Updates never lie. */
+const HARNESS_VERSION = '1.1.3'
+
 declare global {
   interface Window {
     oneboost?: Bridge
@@ -92,11 +95,18 @@ function createBrowserHarnessBridge(): Bridge {
       prefs,
       dashboard,
       storage: { file: '(browser preview)', bytes: 0, recovered: false, healthy: true },
-      version: '1.0.0',
+      version: HARNESS_VERSION,
       platform: 'browser',
       historyDays: [],
     }),
     getDashboard: async () => dashboard,
+    getMonitorSample: async () => null,
+    monitor: (cb) => {
+      ;(listeners['monitor'] ??= []).push(cb as (...args: unknown[]) => void)
+      return () => {
+        listeners['monitor'] = listeners['monitor'].filter((f) => f !== cb)
+      }
+    },
     navigate: (page: PageId) => emit('page', page),
     openAppDetail: () => undefined,
     pageChanged: (cb) => {
@@ -126,7 +136,7 @@ function createBrowserHarnessBridge(): Bridge {
     getSettingsData: async () => ({
       prefs,
       storage: { file: '(browser preview)', bytes: 0, recovered: false, healthy: true },
-      version: '1.0.0',
+      version: HARNESS_VERSION,
       platform: 'browser',
       launch: { enabled: false, registered: false, pathMatches: false, needsRepair: false, registeredPath: null },
       days: [],
@@ -140,12 +150,12 @@ function createBrowserHarnessBridge(): Bridge {
     }),
     getUpdateState: async () => ({
       status: 'up-to-date' as const,
-      currentVersion: '1.1.1',
+      currentVersion: HARNESS_VERSION,
       checkedAt: Date.now(),
     }),
     checkForUpdates: async () => ({
       status: 'up-to-date' as const,
-      currentVersion: '1.1.1',
+      currentVersion: HARNESS_VERSION,
       checkedAt: Date.now(),
     }),
     installUpdate: async () => false,

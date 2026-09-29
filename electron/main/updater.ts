@@ -1,7 +1,7 @@
 // Auto-update via GitHub Releases (electron-updater).
 //
 // Channels:
-//   stable   — installs from tagged stable releases (e.g. v1.1.2). They only
+//   stable   — installs from tagged stable releases (e.g. v1.1.3). They only
 //              ever see the stable feed (`latest.yml`), so they are NEVER
 //              auto-updated to alpha/beta builds.
 //   unstable — installs built from alpha/beta tags. They read the beta feed

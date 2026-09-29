@@ -5,7 +5,7 @@
 import koffi from 'koffi'
 import { join, dirname } from 'node:path'
 import { existsSync } from 'node:fs'
-import type { BoostEvent, BoostEventKind, BoostSample } from '../../shared/types'
+import type { BoostEvent, BoostEventKind, BoostSample, MonitorSample } from '../../shared/types'
 
 // esbuild emits CJS, so prefer __filename with an ESM fallback.
 const here =
@@ -51,6 +51,8 @@ const FN_DEFS = {
   collect: { name: 'oneboost_collect_once', result: 'int', args: ['void *', 'uint32'] },
   pump: { name: 'oneboost_pump_events', result: 'int', args: ['void *', 'void *', 'uint32'] },
   idle: { name: 'oneboost_get_idle_state', result: 'int', args: ['void *'] },
+  monitor: { name: 'oneboost_monitor_sample', result: 'int', args: ['void *'] },
+  monitorShutdown: { name: 'oneboost_monitor_shutdown', result: 'void', args: [] as string[] },
 }
 
 function fn(name: keyof typeof FN_DEFS) {
@@ -88,6 +90,36 @@ const S_SIZE = 592
 const E_SIZE = 24
 const P_SIZE = 32
 const MAX_EVENTS = 64
+
+// BoostMonitorResult: 1152 bytes. Offsets pinned by Rust tests in
+// electron/native/src/monitor.rs (monitor_layouts).
+const M = {
+  ok: 0,
+  nowEpochMs: 8,
+  cpuUsage: 16,
+  cpuTemp: 24,
+  cpuName: 32,
+  cpuCores: 160,
+  memUsed: 168,
+  memTotal: 176,
+  gpuUsage: 184,
+  gpuTemp: 192,
+  gpuMemUsed: 200,
+  gpuMemTotal: 208,
+  gpuName: 216,
+  diskReadBps: 408,
+  diskWriteBps: 416,
+  diskActivePct: 424,
+  netDownloadBps: 432,
+  netUploadBps: 440,
+  netIfName: 448,
+  drives: 640, // 8 × BoostDriveInfo (letter u32 @+0, pad, total u64 @+8, free u64 @+16)
+  osName: 832,
+  osVersion: 1024,
+}
+const M_SIZE = 1152
+const M_DRIVE_SIZE = 24
+const M_DRIVE_COUNT = 8
 
 function readUtf16(buf: Buffer, off: number, maxChars: number): string {
   let end = off
@@ -169,4 +201,78 @@ export function nativeIdleState(): { ok: boolean; idleMs: number } {
 
 export function isNativeLoaded(): boolean {
   return lib !== null
+}
+
+/**
+ * One system-monitoring snapshot from the Rust layer. Unavailable metrics
+ * arrive as null (Rust sends -1 / 0 sentinels) — never NaN or invented values.
+ */
+export function nativeMonitorSample(): MonitorSample {
+  const out = Buffer.alloc(M_SIZE)
+  const rc = fn('monitor')(out)
+  if (rc !== 1) throw new Error('oneboost_monitor_sample failed: ' + rc)
+  const dv = new DataView(out.buffer, out.byteOffset, out.byteLength)
+  const num = (v: number) => (Number.isFinite(v) ? v : null)
+  const f64 = (off: number) => num(dv.getFloat64(off, true))
+  const str = (off: number, maxChars: number) => readUtf16(out, off, maxChars)
+
+  const drives: MonitorSample['drives'] = []
+  for (let i = 0; i < M_DRIVE_COUNT; i++) {
+    const base = M.drives + i * M_DRIVE_SIZE
+    const letterCode = dv.getUint32(base, true)
+    const totalBytes = Number(dv.getBigUint64(base + 8, true))
+    if (letterCode === 0 || totalBytes <= 0) continue
+    drives.push({
+      letter: String.fromCharCode(letterCode),
+      totalBytes,
+      freeBytes: Number(dv.getBigUint64(base + 16, true)),
+    })
+  }
+
+  const cpuUsage = f64(M.cpuUsage)
+  return {
+    ok: dv.getInt32(M.ok, true) === 1,
+    nowMs: Number(dv.getBigUint64(M.nowEpochMs, true)),
+    cpu: {
+      usage: cpuUsage !== null && cpuUsage >= 0 ? cpuUsage : null,
+      tempC: f64(M.cpuTemp),
+      name: str(M.cpuName, 64),
+      cores: dv.getUint32(M.cpuCores, true),
+    },
+    memory: {
+      usedBytes: Number(dv.getBigUint64(M.memUsed, true)),
+      totalBytes: Number(dv.getBigUint64(M.memTotal, true)),
+    },
+    gpu: {
+      usage: f64(M.gpuUsage),
+      tempC: f64(M.gpuTemp),
+      memUsedBytes: Number(dv.getBigUint64(M.gpuMemUsed, true)),
+      memTotalBytes: Number(dv.getBigUint64(M.gpuMemTotal, true)),
+      name: str(M.gpuName, 96),
+    },
+    disk: {
+      readBps: f64(M.diskReadBps),
+      writeBps: f64(M.diskWriteBps),
+      activePct: f64(M.diskActivePct),
+    },
+    network: {
+      downloadBps: f64(M.netDownloadBps),
+      uploadBps: f64(M.netUploadBps),
+      interface: str(M.netIfName, 96) || null,
+    },
+    drives,
+    os: {
+      name: str(M.osName, 96),
+      version: str(M.osVersion, 64),
+    },
+  }
+}
+
+/** Release monitoring resources (PDH query) in the native layer. */
+export function nativeMonitorShutdown(): void {
+  try {
+    if (lib) fn('monitorShutdown')()
+  } catch {
+    /* ignore */
+  }
 }

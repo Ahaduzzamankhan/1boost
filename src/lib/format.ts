@@ -39,6 +39,33 @@ export function formatPercent(fraction: number, digits = 0): string {
   return `${(fraction * 100).toFixed(digits)}%`
 }
 
+/** "5.8 GB" / "512 MB" / "1.2 TB" — binary units, matching what Windows shows. */
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return '—'
+  const UNITS = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
+  let v = bytes
+  let u = 0
+  while (v >= 1024 && u < UNITS.length - 1) {
+    v /= 1024
+    u++
+  }
+  const digits = v >= 100 || u === 0 ? 0 : v >= 10 ? 1 : 2
+  return `${v.toFixed(digits)} ${UNITS[u]}`
+}
+
+/** "2.4 MB/s" style transfer rates from bytes/sec. */
+export function formatRate(bytesPerSec: number): string {
+  if (!Number.isFinite(bytesPerSec) || bytesPerSec < 0) return '—'
+  if (bytesPerSec < 1024) return `${Math.round(bytesPerSec)} B/s`
+  return `${formatBytes(bytesPerSec)}/s`
+}
+
+/** "54 °C" or "unavailable" for sensor values. */
+export function formatTemp(c: number | null): string {
+  if (c == null || !Number.isFinite(c)) return 'Unavailable'
+  return `${Math.round(c)} °C`
+}
+
 /** "September 28" */
 export function formatDayLabel(dateKey: string): string {
   const [y, m, d] = dateKey.split('-').map(Number)

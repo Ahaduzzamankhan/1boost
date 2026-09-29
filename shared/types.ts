@@ -46,6 +46,61 @@ export interface BoostEvent {
   atMs: number
 }
 
+// ---- System monitoring (Rust layer → main → renderer) ----------------------
+
+export interface MonitorDrive {
+  /** Drive letter without colon, e.g. "C". */
+  letter: string
+  totalBytes: number
+  freeBytes: number
+}
+
+/**
+ * One system-monitoring snapshot. Metrics the OS cannot provide are `null` —
+ * the UI must render those as "unavailable", never guess.
+ */
+export interface MonitorSample {
+  ok: boolean
+  nowMs: number
+  cpu: {
+    /** 0..=100, or null while unavailable (e.g. first sample). */
+    usage: number | null
+    /** °C, or null when no usable sensor exists. */
+    tempC: number | null
+    name: string
+    cores: number
+  }
+  memory: {
+    usedBytes: number
+    totalBytes: number
+  }
+  gpu: {
+    usage: number | null
+    tempC: number | null
+    /** Bytes in use; 0 = unavailable. */
+    memUsedBytes: number
+    memTotalBytes: number
+    name: string
+  }
+  disk: {
+    readBps: number | null
+    writeBps: number | null
+    /** 0..=100 disk activity, or null. */
+    activePct: number | null
+  }
+  network: {
+    downloadBps: number | null
+    uploadBps: number | null
+    /** Description of the busiest active adapter, when known. */
+    interface: string | null
+  }
+  drives: MonitorDrive[]
+  os: {
+    name: string
+    version: string
+  }
+}
+
 export interface Prefs {
   theme: ThemeId
   accent: AccentId
@@ -246,6 +301,10 @@ export interface Bridge {
     historyDays: { date: string; activeMs: number; onMs: number }[]
   }>
   getDashboard: () => Promise<DashboardData>
+  /** Latest system-monitoring snapshot (null when the native layer is missing). */
+  getMonitorSample: () => Promise<MonitorSample | null>
+  /** Subscribe to live monitoring pushes; returns an unsubscribe function. */
+  monitor: (cb: (s: MonitorSample) => void) => () => void
   navigate: (page: PageId) => void
   openAppDetail: (key: string) => void
   pageChanged: (cb: (page: PageId) => void) => () => void
@@ -278,7 +337,7 @@ export interface Bridge {
   openDataFolder: () => void
 }
 
-export type PageId = 'dashboard' | 'apps' | 'stats' | 'history' | 'settings'
+export type PageId = 'dashboard' | 'monitor' | 'apps' | 'stats' | 'history' | 'settings'
 
 export interface ToastMsg {
   id: number
