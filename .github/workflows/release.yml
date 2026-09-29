@@ -91,7 +91,11 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME}"
           node scripts/release-notes.mjs "${TAG#v}" release-notes.md
-          gh release upload "$TAG" release/*.exe.blockmap --clobber
+          # electron-builder already attached the .exe, .exe.blockmap (delta
+          # source) and latest.yml. Verify the blockmap is present so delta
+          # updates can never silently ship without it, then set the notes.
+          gh release view "$TAG" --json assets --jq '.assets[].name' | grep -q '\.exe\.blockmap$' \
+            || { echo '::error::blockmap missing from release assets'; exit 1; }
           gh release edit "$TAG" --notes-file release-notes.md
 
       - name: Publish release (stable) or mark prerelease (alpha/beta)
