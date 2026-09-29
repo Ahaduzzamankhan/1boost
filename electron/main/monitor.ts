@@ -1,11 +1,12 @@
 // System-monitoring service (main process).
 //
-// Owns the single poll of the native monitoring layer. The renderer never
-// polls: it calls `oneboost:monitor` to subscribe and receives one IPC push
-// per sample while at least one subscriber exists. The poll always runs at a
-// steady cadence while subscribed (rate metrics need evenly spaced samples),
-// with a short overlap after the last unsubscribe so re-opening the page
-// doesn't restart from "unavailable".
+// The renderer never polls: opening the Monitor page calls
+// `oneboost:monitor-subscribe` (sent by the preload bridge when a listener is
+// registered), which starts the shared poll and delivers a fresh seed sample.
+// Subsequent samples arrive as one IPC push per tick while at least one
+// subscriber exists. The poll always runs at a steady cadence while subscribed
+// (rate metrics need evenly spaced samples), with a short overlap after the
+// last unsubscribe so re-opening the page doesn't restart from "unavailable".
 
 import { BrowserWindow, ipcMain } from 'electron'
 import type { MonitorSample } from '../../shared/types'
@@ -22,6 +23,7 @@ export class Monitor {
   private timer: NodeJS.Timeout | null = null
   private last: MonitorSample | null = null
   private subscribers = 0
+  private rendererUnsub: (() => void) | null = null
   private lastUnsubscribeMs = 0
   private healthy = true
   private stopped = false
@@ -39,16 +41,11 @@ export class Monitor {
       this.timer = null
     }
     this.last = null
+    this.rendererUnsub = null
     nativeMonitorShutdown()
   }
 
   /** Current snapshot: the cached one if fresh, else one fresh sample. */
-  current(): MonitorSample | null {
-    if (!this.healthy) return null
-    if (this.last) return this.last
-    return this.sampleOnce()
-  }
-
   subscribe(): () => void {
     this.subscribers++
     this.start()
@@ -59,8 +56,32 @@ export class Monitor {
     }
   }
 
+  /** Seed sample on demand: fresh when none is cached yet. */
+  current(): MonitorSample | null {
+    if (!this.healthy) return null
+    if (!this.last) return this.sampleOnce()
+    return this.last
+  }
+
   registerIpc(): void {
     ipcMain.handle('oneboost:get-monitor', () => this.current())
+    ipcMain.on('oneboost:monitor-subscribe', (e) => {
+      // One live subscription per renderer; the unsubscribe callback is
+      // refcounted, so two Monitor pages (never happens) would still be safe.
+      if (this.subscribers === 0 || !this.rendererUnsub) {
+        this.rendererUnsub = this.subscribe()
+      }
+      // Answer on the same channel the renderer listens to for pushes, so a
+      // fresh seed is never lost to the race between invoke() and push.
+      const s = this.current()
+      if (s && !e.sender.isDestroyed()) e.sender.send('oneboost:monitor', s)
+    })
+    ipcMain.on('oneboost:monitor-unsubscribe', () => {
+      if (this.rendererUnsub) {
+        this.rendererUnsub()
+        this.rendererUnsub = null
+      }
+    })
   }
 
   private sampleOnce(): MonitorSample | null {

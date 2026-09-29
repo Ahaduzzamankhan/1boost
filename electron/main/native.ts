@@ -212,8 +212,12 @@ export function nativeMonitorSample(): MonitorSample {
   const rc = fn('monitor')(out)
   if (rc !== 1) throw new Error('oneboost_monitor_sample failed: ' + rc)
   const dv = new DataView(out.buffer, out.byteOffset, out.byteLength)
-  const num = (v: number) => (Number.isFinite(v) ? v : null)
-  const f64 = (off: number) => num(dv.getFloat64(off, true))
+  // Unavailable floats arrive as the -1.0 sentinel (or NaN on a bad read):
+  // map both to null so the UI renders "unavailable", never a literal -1.
+  const f64 = (off: number) => {
+    const v = dv.getFloat64(off, true)
+    return Number.isFinite(v) && v >= 0 ? v : null
+  }
   const str = (off: number, maxChars: number) => readUtf16(out, off, maxChars)
 
   const drives: MonitorSample['drives'] = []
@@ -234,7 +238,7 @@ export function nativeMonitorSample(): MonitorSample {
     ok: dv.getInt32(M.ok, true) === 1,
     nowMs: Number(dv.getBigUint64(M.nowEpochMs, true)),
     cpu: {
-      usage: cpuUsage !== null && cpuUsage >= 0 ? cpuUsage : null,
+      usage: cpuUsage,
       tempC: f64(M.cpuTemp),
       name: str(M.cpuName, 64),
       cores: dv.getUint32(M.cpuCores, true),
@@ -261,11 +265,24 @@ export function nativeMonitorSample(): MonitorSample {
       interface: str(M.netIfName, 96) || null,
     },
     drives,
-    os: {
-      name: str(M.osName, 96),
-      version: str(M.osVersion, 64),
-    },
+    os: normalizeOsName(str(M.osName, 96), str(M.osVersion, 64)),
   }
+}
+
+/**
+ * Windows 11 kept the registry ProductName "Windows 10" for compatibility —
+ * read the build number (displayed alongside it) and correct the marketing
+ * name so the Monitor header doesn't claim the wrong OS. Build >= 22000 is
+ * Windows 11; nothing older is renamed.
+ */
+export function normalizeOsName(name: string, version: string): { name: string; version: string } {
+  const n = (name || '').trim() || 'Windows'
+  const buildMatch = /build\s+(\d+)/i.exec(version)
+  const build = buildMatch ? parseInt(buildMatch[1], 10) : 0
+  if (/windows\s*10/i.test(n) && build >= 22000) {
+    return { name: n.replace(/windows\s*10/i, 'Windows 11'), version }
+  }
+  return { name: n, version }
 }
 
 /** Release monitoring resources (PDH query) in the native layer. */

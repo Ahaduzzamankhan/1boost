@@ -115,10 +115,8 @@ function bind(): void {
       progress: 100,
       checkedAt: Date.now(),
     })
-    const win = BrowserWindow.getAllWindows()[0]
-    if (win && !win.isDestroyed()) {
-      win.webContents.send('oneboost:toast', `Version ${info.version ?? ''} ready — restart to update in Settings`)
-    }
+    // No toast: the renderer shows a "Restart now / Later" prompt modal for
+    // status 'ready', which is the single notification surface.
   })
   autoUpdater.on('error', (err) => {
     // Keep the app usable: record the failure and return to idle.

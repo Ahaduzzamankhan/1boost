@@ -16,11 +16,36 @@ locally on your device.
   AMOLED), 8 accent colors, transparency slider, launch-at-startup, pause
   tracking, idle threshold, history retention, data export/delete, and reduced
   motion.
-- **Monitor** (v1.1.3) — live CPU, memory, GPU, disk and network dashboards
+- **Monitor** (v1.1.4) — live CPU, memory, GPU, disk and network dashboards
   with real-time graphs, temperatures where the hardware exposes them, and
   per-drive storage bars.
 
-### New in v1.1.3
+### New in v1.1.4
+
+- **Monitor fixed** — opening the Monitor page now actually starts the native
+  poll (the subscription IPC was missing, so only the one-shot seed sample ever
+  arrived: CPU/graphs/network froze while memory looked alive). Unavailable
+  temperatures and GPU usage no longer render as literal `-1` chips, and the
+  hottest thermal zone / busiest GPU engine is reported instead of a sum of
+  all instances.
+- **Windows 11 detected correctly** — the Monitor header no longer claims
+  "Windows 10" on Windows 11 (the registry ProductName is still "Windows 10"
+  there; the build number is the truth, ≥ 22000 = Windows 11).
+- **Rounded corners + stable animations** — the frameless window now gets a
+  real rounded shell (collapses when maximized), and the page/modal/toast
+  transitions no longer animate transforms above the blur layer, which caused
+  corrupted/torn frames on transparent windows.
+- **Update prompt** — when an update finishes downloading, 1Boost shows an
+  in-app prompt with **Restart now** / **Later** instead of a toast.
+- **Delta updates** — NSIS builds ship differential packages so updates only
+  download changed blocks.
+- **Official icons** — drop the official PNG(s) into a root `icons/` folder;
+  `make-icons.js` embeds the largest one into `icon.ico`/`tray.ico`
+  automatically (procedural amber fallback otherwise), and the in-app brand
+  mark uses the same artwork style.
+- Chart axis labels no longer clip ("4h 20m" rendered as "h 20m"), per-day
+  labels use local dates, and the App User Model ID matches the installer
+  identity so notifications group correctly.
 
 - **System monitoring** — a new Monitor page shows CPU usage, RAM, GPU,
   disk activity (read/write speeds), and network throughput, each with a

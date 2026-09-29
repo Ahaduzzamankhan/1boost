@@ -60,9 +60,9 @@ export function formatRate(bytesPerSec: number): string {
   return `${formatBytes(bytesPerSec)}/s`
 }
 
-/** "54 °C" or "unavailable" for sensor values. */
+/** "54 °C" or "unavailable" for sensor values (sentinels never render). */
 export function formatTemp(c: number | null): string {
-  if (c == null || !Number.isFinite(c)) return 'Unavailable'
+  if (c == null || !Number.isFinite(c) || c <= 0) return 'Unavailable'
   return `${Math.round(c)} °C`
 }
 

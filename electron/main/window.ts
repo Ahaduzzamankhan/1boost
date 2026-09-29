@@ -106,8 +106,34 @@ export function createMainWindow(): BrowserWindow {
     }
   })
 
+  applyRoundedCorners(win)
+
   mainWindow = win
   return win
+}
+
+/**
+ * Rounded window shell, kept in sync with the maximize state:
+ *  - the frameless transparent window gets visible rounded corners from the
+ *    CSS radius on `.app` (index.css); DWM never rounds transparent windows,
+ *  - `data-win-max` on the document root collapses the radius when maximized
+ *    so content reaches the true screen edges,
+ *  - the same push drives the titlebar maximize/restore icon via the existing
+ *    `oneboost:window-state` channel (the renderer listens to it already).
+ */
+function applyRoundedCorners(win: BrowserWindow): void {
+  const push = () => {
+    if (win.isDestroyed()) return
+    win.webContents.send('oneboost:window-state', {
+      maximized: win.isMaximized(),
+      focused: win.isFocused(),
+    })
+  }
+  win.on('maximize', push)
+  win.on('unmaximize', push)
+  win.on('focus', push)
+  win.on('blur', push)
+  push()
 }
 
 export function appExit(): void {

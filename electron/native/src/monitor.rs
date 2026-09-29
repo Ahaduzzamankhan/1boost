@@ -363,6 +363,8 @@ fn init_names() -> ([u16; 64], u32, [u16; 96], [u16; 96], [u16; 64]) {
     unsafe {
         let mut si: SYSTEM_INFO = std::mem::zeroed();
         GetSystemInfo(&mut si);
+        // dwNumberOfProcessors is the logical-processor count (threads), which
+        // is what Task Manager shows first; keep that semantic in the UI.
         cpu_cores = si.dwNumberOfProcessors;
     }
 
@@ -376,6 +378,18 @@ fn init_names() -> ([u16; 64], u32, [u16; 96], [u16; 96], [u16; 64]) {
 
     let product = unsafe { reg_read_string(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion", "ProductName") }
         .unwrap_or_else(|| "Windows".into());
+    // Windows 11 kept the registry ProductName "Windows 10"; derive the real
+    // marketing name from the build number (>= 22000 is Windows 11).
+    let build_str = unsafe {
+        reg_read_string(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion", "CurrentBuildNumber")
+    };
+    let product = match build_str.as_deref().and_then(|b| b.trim().parse::<u32>().ok()) {
+        Some(build) if build >= 22000 => product
+            .replacen("Windows 10", "Windows 11", 1)
+            .trim()
+            .to_string(),
+        _ => product,
+    };
     store_wide(&mut os_name, product.trim());
 
     let display = unsafe {
@@ -449,6 +463,51 @@ unsafe fn sum_counter_array(handle: isize) -> Option<f64> {
     }
 }
 
+/// MAX of every valid instance of a wildcard counter — used for metrics whose
+/// instances are alternatives rather than additive components (temperatures,
+/// utilization percentages, where a sum can exceed the physical maximum).
+unsafe fn max_counter_array(handle: isize) -> Option<f64> {
+    if handle == 0 {
+        return None;
+    }
+    let mut size: u32 = 65_536;
+    let mut buf: Vec<u64> = Vec::new();
+    loop {
+        buf.resize((size as usize + 7) / 8, 0);
+        let mut count: u32 = 0;
+        let rc = PdhGetFormattedCounterArrayW(
+            handle,
+            PDH_FMT_DOUBLE,
+            &mut size,
+            &mut count,
+            buf.as_mut_ptr() as *mut u8,
+        );
+        if rc == PDH_MORE_DATA {
+            if size as usize > 4 * 1024 * 1024 || size == 0 {
+                return None;
+            }
+            continue;
+        }
+        if rc != ERROR_SUCCESS {
+            return None;
+        }
+        let items = std::slice::from_raw_parts(
+            buf.as_ptr() as *const PdhFmtCounterValueItemW,
+            count as usize,
+        );
+        let mut max = 0.0f64;
+        let mut any = false;
+        for it in items {
+            if it.fmt_value.c_status <= PDH_CSTATUS_NEW_DATA && it.fmt_value.double_value.is_finite()
+            {
+                max = max.max(it.fmt_value.double_value);
+                any = true;
+            }
+        }
+        return if any { Some(max) } else { None };
+    }
+}
+
 /// Formatted value of a single-instance counter.
 unsafe fn formatted_single(handle: isize) -> Option<f64> {
     if handle == 0 {
@@ -471,8 +530,9 @@ unsafe fn formatted_single(handle: isize) -> Option<f64> {
 
 /// Hottest valid thermal zone in °C. The PDH counter reports Kelvin on most
 /// firmware; values that already look like Celsius are accepted as-is.
+/// MAX, not the sum: zones are alternatives, not additive components.
 unsafe fn hottest_temp(handle: isize) -> Option<f64> {
-    sum_counter_array(handle).and_then(|raw| {
+    max_counter_array(handle).and_then(|raw| {
         let c = if raw > 150.0 { raw - 273.15 } else { raw };
         if (1.0..=120.0).contains(&c) {
             Some((c * 10.0).round() / 10.0)
@@ -701,6 +761,9 @@ fn monitor_sample_inner(out: &mut BoostMonitorResult) -> i32 {
         }
     }
     if let Some(v) = gpu_util {
+        // "Utilization Percentage" summed over every engine instance can
+        // exceed 100 when several engines run concurrently; overall usage is
+        // reported here as the busiest engine, not an invented total.
         out.gpu_usage = v.clamp(0.0, 100.0);
     }
     if let Some(v) = gpu_mem {

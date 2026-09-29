@@ -228,12 +228,28 @@ button:focus-visible,
 
 /* Single blur layer on the app root only. Nested backdrop-filters (per-card)
    re-composite every frame and caused black/white flicker bands on the
-   transparent themes. */
+   transparent themes. No transform/will-change here: forcing a compositor
+   layer under a backdrop-filter corrupted rendering on some Windows GPU
+   stacks (torn/partially painted frames, frozen animations). */
 :root[data-glass='1'] .app {
   backdrop-filter: blur(var(--blur)) saturate(140%);
   -webkit-backdrop-filter: blur(var(--blur)) saturate(140%);
-  transform: translateZ(0);
-  will-change: backdrop-filter;
+}
+
+/* Rounded window shell. The frameless transparent window gets native Win11
+   DWM rounding (window.ts) plus this matching CSS clip so the app's own
+   background can never paint into the square corners. The radius collapses
+   when the window is maximized (data-win-max on <html>). */
+:root {
+  --win-radius: 10px;
+}
+:root[data-win-max='1'] {
+  --win-radius: 0px;
+}
+
+.app {
+  border-radius: var(--win-radius);
+  overflow: hidden;
 }
 
 .titlebar {
@@ -388,6 +404,10 @@ button:focus-visible,
 .page {
   max-width: 980px;
   margin: 0 auto;
+  /* Opacity only: a transform here promoted every page to its own compositor
+     layer above the window blur layer, which rendered corrupted (ghosted /
+     torn frames) on transparent Windows windows. Fading is safe and looks
+     identical in practice. */
   animation: pageIn var(--transition-normal) var(--ease);
   padding-bottom: var(--space-10);
 }
@@ -395,11 +415,9 @@ button:focus-visible,
 @keyframes pageIn {
   from {
     opacity: 0;
-    transform: translateY(6px);
   }
   to {
     opacity: 1;
-    transform: none;
   }
 }
 
@@ -1014,8 +1032,8 @@ button:focus-visible,
 }
 
 @keyframes modalIn {
-  from { opacity: 0; transform: translateY(10px) scale(0.98); }
-  to { opacity: 1; transform: none; }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 .modal-head {
@@ -1054,8 +1072,8 @@ button:focus-visible,
 }
 
 @keyframes toastIn {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: none; }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 /* Loading screen */
@@ -1092,8 +1110,8 @@ button:focus-visible,
 }
 
 @keyframes logoIn {
-  from { opacity: 0; transform: scale(0.9); }
-  to { opacity: 1; transform: none; }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 .loading-title {
@@ -1186,8 +1204,8 @@ button:focus-visible,
 }
 
 @keyframes ctxIn {
-  from { opacity: 0; transform: scale(0.97); }
-  to { opacity: 1; transform: none; }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 .ctx-item {

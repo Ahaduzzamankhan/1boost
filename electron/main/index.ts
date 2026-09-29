@@ -47,7 +47,9 @@ function bootstrap(): void {
   const startHidden = process.argv.includes('--hidden') || process.argv.includes('--start-minimized')
   setStartHidden(startHidden)
 
-  app.setAppUserModelId('com.oneboost.app')
+  // Must match build.appId so toast notifications and the taskbar group
+  // resolve to the installed app identity.
+  app.setAppUserModelId('com.ahaduzzamankhan.oneboost')
 
   setupAppMenu()
 

@@ -6,16 +6,18 @@ import {
   ChartNoAxesCombined,
   History as HistoryIcon,
   Settings as SettingsIcon,
-  Zap,
   Minus,
   Square,
   Copy,
   X,
+  RefreshCw,
+  Rocket,
+  Clock as ClockIcon,
 } from 'lucide-react'
-import type { PageId, Prefs, ToastMsg } from '../../shared/types'
+import type { PageId, Prefs, ToastMsg, UpdateState } from '../../shared/types'
 import { bridge } from '../bridge'
 import { useNavigation } from '../state'
-import { ToastIcon } from './ui'
+import { BrandMark, ToastIcon } from './ui'
 
 async function setPrefBridge(key: keyof Prefs, value: string | number | boolean): Promise<void> {
   await bridge.setPref(key, value)
@@ -43,7 +45,12 @@ function TitleBar() {
       if (alive) setMaximized(m)
     })
     const off = bridge.windowState((s) => {
-      if (alive) setMaximized(s.maximized)
+      if (alive) {
+        setMaximized(s.maximized)
+        // The window shell radius collapses while maximized so content reaches
+        // the true screen edges (see index.css .app radius).
+        document.documentElement.dataset.winMax = s.maximized ? '1' : '0'
+      }
     })
     return () => {
       alive = false
@@ -54,7 +61,7 @@ function TitleBar() {
   return (
     <div className="titlebar">
       <div className="titlebar-title">
-        <Zap size={15} />
+        <BrandMark size={15} />
         <span>1Boost</span>
       </div>
       <div className="titlebar-controls">
@@ -112,6 +119,45 @@ function useContextMenu() {
   return menu
 }
 
+/** Global "update ready" prompt: Restart now or Later. */
+function UpdatePrompt({ update }: { update: UpdateState | null }) {
+  const [dismissed, setDismissed] = useState<string | null>(null)
+  const open = update?.status === 'ready' && dismissed !== update.availableVersion
+  if (!open) return null
+  return (
+    <div className="modal-overlay" style={{ zIndex: 400 }}>
+      <div className="modal" role="alertdialog" aria-modal="true" aria-label="Update ready" style={{ width: 'min(420px, calc(100vw - 48px))' }}>
+        <div className="modal-head">
+          <div className="section-title" style={{ marginBottom: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Rocket size={18} color="var(--accent)" /> Update ready
+          </div>
+          <button
+            className="btn btn-ghost"
+            aria-label="Later"
+            onClick={() => setDismissed(update!.availableVersion ?? 'ready')}
+          >
+            <X size={18} />
+          </button>
+        </div>
+        <div className="modal-body">
+          <p style={{ color: 'var(--text-secondary)', fontSize: 13.5, lineHeight: 1.55 }}>
+            Version <b style={{ color: 'var(--text-primary)' }}>{update!.availableVersion ?? ''}</b> has been downloaded
+            and will install the next time 1Boost restarts.
+          </p>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 18 }}>
+            <button className="btn btn-secondary" onClick={() => setDismissed(update!.availableVersion ?? 'ready')}>
+              <ClockIcon size={15} /> Later
+            </button>
+            <button className="btn btn-primary" onClick={() => void bridge.installUpdate()}>
+              <RefreshCw size={15} /> Restart now
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function AppShell({
   prefs,
   toasts,
@@ -127,6 +173,19 @@ export default function AppShell({
 }) {
   const { page, navigate } = useNavigation()
   const ctx = useContextMenu()
+  const [update, setUpdate] = useState<UpdateState | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    bridge.getUpdateState().then((s) => alive && setUpdate(s)).catch(() => undefined)
+    const off = bridge.onUpdateState((s) => {
+      if (alive) setUpdate(s)
+    })
+    return () => {
+      alive = false
+      off()
+    }
+  }, [])
 
   return (
     <div className="app">
@@ -135,7 +194,7 @@ export default function AppShell({
         <aside className="sidebar">
           <div className="sidebar-brand">
             <div className="brand-icon">
-              <Zap size={16} strokeWidth={2.4} />
+              <BrandMark size={16} />
             </div>
             <span className="brand-name">1Boost</span>
           </div>
@@ -185,6 +244,7 @@ export default function AppShell({
         </main>
       </div>
       <Toasts toasts={toasts} />
+      <UpdatePrompt update={update} />
       {ctx ? (
         <div className="ctx-menu" style={{ left: ctx.x, top: ctx.y }} role="menu">
           <button

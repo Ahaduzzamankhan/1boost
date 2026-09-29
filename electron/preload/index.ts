@@ -17,8 +17,14 @@ const api = {
   getMonitorSample: () => ipcRenderer.invoke('oneboost:get-monitor'),
   monitor: (cb: (s: MonitorSample) => void) => {
     const h = (_e: unknown, s: MonitorSample) => cb(s)
+    // Register the listener FIRST, then ask main to start the poll — the
+    // subscription must never miss a push that races the IPC round-trip.
     ipcRenderer.on('oneboost:monitor', h)
-    return () => ipcRenderer.removeListener('oneboost:monitor', h)
+    void ipcRenderer.invoke('oneboost:monitor-subscribe').catch(() => undefined)
+    return () => {
+      ipcRenderer.removeListener('oneboost:monitor', h)
+      void ipcRenderer.invoke('oneboost:monitor-unsubscribe').catch(() => undefined)
+    }
   },
   navigate: (page: PageId) => ipcRenderer.send('oneboost:navigate', page),
   openAppDetail: (key: string) => ipcRenderer.send('oneboost:open-app-detail', key),

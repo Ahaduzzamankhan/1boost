@@ -55,7 +55,8 @@ export function TrendChart({
 
   const W = 800
   const H = height
-  const PADX = 34
+  // Wide enough for the longest axis label ("4h 40m") at font-size 10.
+  const PADX = 44
   const PADT = 12
   const PADB = 22
   const innerW = W - PADX * 2
@@ -190,7 +191,7 @@ export function DailyBars({ points, height = 190 }: { points: TrendPoint[]; heig
   const { tip, show, hide } = useTooltip()
   const W = 800
   const H = height
-  const PADX = 34
+  const PADX = 44
   const PADT = 12
   const PADB = 22
   const innerW = W - PADX * 2

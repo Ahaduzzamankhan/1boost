@@ -4,6 +4,9 @@ dist-electron/
 release/
 resources/native/
 resources/icons/*.ico
+# Official brand artwork (source of resources/icons/*.ico via make-icons.js).
+# Drop the app's official PNG(s) here; the largest square one wins.
+!/icons/**
 *.user-data/
 .DS_Store
 .freebuff
