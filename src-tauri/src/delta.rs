@@ -394,7 +394,7 @@ mod tests {
     fn rejects_instructions_that_overshoot_the_declared_length() {
         let base = b"abc".to_vec();
         let target = b"abc".to_vec();
-        let patch = hand_made(
+        let mut patch = hand_made(
             &[Spec::Copy {
                 offset: 0,
                 length: 3,
