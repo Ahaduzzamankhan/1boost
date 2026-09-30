@@ -39,6 +39,25 @@ jobs:
             native
             src-tauri
 
+      # Signing keys pasted into GitHub secrets often pick up CR/LF, stray
+      # whitespace, or arrive as the whole minisign file (with its
+      # "untrusted comment:" header line), which makes the Tauri signer fail
+      # with "Invalid input for the given encoding". Keep only the base64
+      # key line and strip all whitespace before the build consumes them.
+      - name: Normalize signing key secrets (strip CR/LF/whitespace)
+        shell: bash
+        run: |
+          KEY_RAW="${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}"
+          KEY_CLEAN=$(printf '%s\n' "$KEY_RAW" | grep -E '^[A-Za-z0-9+/]+={0,2}[[:space:]]*$' | tail -1 | tr -d ' \t\r\n')
+          if [ -z "$KEY_CLEAN" ]; then
+            KEY_CLEAN=$(printf '%s' "$KEY_RAW" | tr -d ' \t\r\n')
+          fi
+          PASS_CLEAN=$(printf '%s' "${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}" | tr -d ' \t\r\n')
+          {
+            echo "TAURI_SIGNING_PRIVATE_KEY=$KEY_CLEAN"
+            echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$PASS_CLEAN"
+          } >> "$GITHUB_ENV"
+
       - name: Verify tag matches package.json and tauri.conf.json versions
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
@@ -86,10 +105,11 @@ jobs:
       - name: Build signed Tauri NSIS release
         uses: tauri-apps/tauri-action@v0
         id: tauria
+        # TAURI_SIGNING_PRIVATE_KEY(_PASSWORD) come pre-normalized from the
+        # GITHUB_ENV set above; do not re-map raw secrets here or they would
+        # override the sanitized values.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: '1Boost ${{ github.ref_name }}'
@@ -112,31 +132,55 @@ jobs:
           node scripts/gen-latest-json.mjs "$VERSION" release-notes.md latest.json
           # Find the NSIS installer + signature the tauri-action uploaded and
           # inline the minisign signature into latest.json, then upload it.
+          # tauri-action names assets 1Boost_<version>_x64-setup.exe plus the
+          # v1-compatible updater payload 1Boost_<version>_x64-setup.nsis.zip
+          # (with .sig). Discover the actual uploaded names from the .sig
+          # files instead of guessing.
           TAG="${GITHUB_REF_NAME}"
-          EXE_NAME="1Boost-Setup-${VERSION}-x64-setup.exe"
-          SIG_NAME="${EXE_NAME}.sig"
-          gh release download "$TAG" --pattern "*.sig" --dir sigtmp
-          if [ ! -f "sigtmp/${SIG_NAME}" ]; then
-            # tauri-action may name files slightly differently; take any sig.
-            FIRST_SIG=$(ls sigtmp/*.sig 2>/dev/null | head -1 || true)
-            if [ -z "$FIRST_SIG" ]; then
-              echo "::error::no .sig updater signature found in release assets"
-              exit 1
-            fi
-            mv "$FIRST_SIG" "sigtmp/${SIG_NAME}"
+          gh release download "$TAG" --pattern "*.exe.sig" --dir sigtmp
+          SIG_FILE=$(ls sigtmp/*.exe.sig 2>/dev/null | head -1)
+          if [ -z "$SIG_FILE" ]; then
+            echo "::error::no .exe.sig updater signature found in release assets"
+            exit 1
           fi
           node - <<'EOF'
           const fs = require('fs');
           const m = JSON.parse(fs.readFileSync('latest.json', 'utf8'));
-          const sigFiles = fs.readdirSync('sigtmp').filter((f) => f.endsWith('.sig'));
-          m.platforms['windows-x86_64'].signature = fs.readFileSync(`sigtmp/${sigFiles[0]}`, 'utf8').trim();
-          const exe = sigFiles[0].replace(/\.sig$/, '');
+          const sigFiles = fs.readdirSync('sigtmp').filter((f) => f.endsWith('.exe.sig')).sort();
+          if (!sigFiles.length) {
+            console.error('::error::no .exe.sig files after download');
+            process.exit(1);
+          }
+          const sigName = sigFiles[0]; // e.g. 1Boost_1.2.0_x64-setup.nsis.zip.sig
+          const payload = sigName.replace(/\.sig$/, '');
+          m.platforms['windows-x86_64'].signature = fs.readFileSync(`sigtmp/${sigName}`, 'utf8').trim();
           m.platforms['windows-x86_64'].url =
-            `https://github.com/Ahaduzzamankhan/1boost/releases/download/${process.env.GITHUB_REF_NAME}/${exe}`;
+            `https://github.com/Ahaduzzamankhan/1boost/releases/download/${process.env.GITHUB_REF_NAME}/${payload}`;
           fs.writeFileSync('latest.json', JSON.stringify(m, null, 2) + '\n');
-          console.log('latest.json ready for', m.version);
+          console.log(`latest.json ready for ${m.version} -> ${payload}`);
           EOF
           gh release upload "$TAG" latest.json --clobber
+
+      # Migration shim: v1.1.x installs still run Electron and update via
+      # electron-updater, which reads latest.yml from the newest published
+      # release. Ship it alongside latest.json so existing users are pulled
+      # onto the Tauri 1.2.0 installer automatically.
+      - name: Generate Electron latest.yml (v1.1.x migration)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          TAG="${GITHUB_REF_NAME}"
+          EXE=$(gh release view "$TAG" --json assets --jq '.assets[].name' | grep -- "_x64-setup\.exe$" | head -1)
+          if [ -z "$EXE" ]; then
+            echo "::error::installer asset not found for latest.yml generation"
+            exit 1
+          fi
+          gh release download "$TAG" --pattern "$EXE" --dir exetmp
+          node scripts/gen-latest-yml.mjs "$VERSION" "exetmp/$EXE" latest.yml
+          gh release upload "$TAG" latest.yml --clobber
 
       - name: Publish release (stable) or mark prerelease (alpha/beta)
         if: startsWith(github.ref, 'refs/tags/v')
@@ -147,9 +191,11 @@ jobs:
           TAG="${GITHUB_REF_NAME}"
           # Verify updater prerequisites: installer, signature, manifest.
           ASSETS=$(gh release view "$TAG" --json assets --jq '.assets[].name')
-          echo "$ASSETS" | grep -q -- "-x64-setup\.exe$" || { echo '::error::installer missing'; exit 1; }
-          echo "$ASSETS" | grep -q '\.exe\.sig$' || { echo '::error::updater signature missing'; exit 1; }
+          echo "$ASSETS" | grep -q -- "_x64-setup\.exe$" || { echo '::error::installer missing'; exit 1; }
+          echo "$ASSETS" | grep -q -- "_x64-setup\.nsis\.zip\.sig$" || { echo '::error::updater signature missing'; exit 1; }
+          echo "$ASSETS" | grep -q -- "_x64-setup\.nsis\.zip$" || { echo '::error::updater payload missing'; exit 1; }
           echo "$ASSETS" | grep -q '^latest\.json$' || { echo '::error::latest.json missing'; exit 1; }
+          echo "$ASSETS" | grep -q '^latest\.yml$' || { echo '::error::latest.yml missing'; exit 1; }
           if [ "$PRERELEASE" = "true" ]; then
             gh release edit "$TAG" --draft=false --prerelease --latest=false
           else
@@ -162,5 +208,6 @@ jobs:
           name: 1Boost-Setup
           path: |
             target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+            target/x86_64-pc-windows-msvc/release/bundle/nsis/*.zip
             target/x86_64-pc-windows-msvc/release/bundle/nsis/*.sig
           if-no-files-found: error

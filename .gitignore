@@ -16,3 +16,4 @@ native/target/
 src-tauri/target/
 src-tauri/gen/
 .tauri-signing/
+keys.md

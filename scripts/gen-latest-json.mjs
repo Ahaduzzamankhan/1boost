@@ -2,9 +2,11 @@
 //
 // Tauri's updater consumes a JSON manifest instead of electron-updater's
 // latest.yml. For each release CI attaches:
-//   - 1Boost-Setup-<version>-x64-setup.exe        (the NSIS installer)
-//   - 1Boost-Setup-<version>-x64-setup.exe.sig    (minisign signature)
-// and this script writes latest.json pointing at the asset download URL.
+//   - 1Boost_<version>_x64-setup.exe        (the NSIS installer)
+//   - 1Boost_<version>_x64-setup.nsis.zip   (v1-compatible updater payload)
+//   - ... with a minisign .sig beside the payload
+// and this script writes latest.json pointing at the updater payload URL;
+// CI then inlines the real minisign signature before uploading it.
 //
 // Usage: node scripts/gen-latest-json.mjs <version> <notes-file> <outfile>
 //   version like 1.2.0 (no v prefix); notes-file is the rendered changelog.
@@ -23,7 +25,7 @@ if (!version || !notesFile || !outfile) {
 const notes = readFileSync(join(root, notesFile), 'utf8')
 const owner = 'Ahaduzzamankhan'
 const repo = '1boost'
-const asset = `1Boost-Setup-${version}-x64-setup.exe`
+const asset = `1Boost_${version}_x64-setup.nsis.zip`
 const url = `https://github.com/${owner}/${repo}/releases/download/v${version}/${asset}`
 
 const manifest = {
