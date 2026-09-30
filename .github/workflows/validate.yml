@@ -1,0 +1,56 @@
+# Validates the Rust crates on every main push (faster feedback than the
+# release pipeline): native crate unit tests + Tauri backend check.
+
+name: Validate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'native/**'
+      - 'src-tauri/**'
+      - '.github/workflows/validate.yml'
+  pull_request:
+    paths:
+      - 'native/**'
+      - 'src-tauri/**'
+  workflow_dispatch:
+
+jobs:
+  rust:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            native
+            src-tauri
+
+      - name: Test native crate
+        working-directory: native
+        run: cargo test --release
+
+      - name: Check Tauri backend (fast, no full build)
+        working-directory: src-tauri
+        run: cargo check --release
+
+      - name: Test Tauri backend lib
+        working-directory: src-tauri
+        run: cargo test --lib --release
+
+  ts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: node scripts/build.mjs renderer

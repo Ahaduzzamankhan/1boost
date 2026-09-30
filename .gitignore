@@ -12,3 +12,7 @@ resources/icons/*.ico
 .freebuff
 1boost-usage-export.json
 electron/native/target/
+native/target/
+src-tauri/target/
+src-tauri/gen/
+.tauri-signing/

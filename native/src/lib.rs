@@ -19,7 +19,8 @@
 #![cfg(windows)]
 #![allow(non_snake_case)]
 
-mod monitor;
+pub mod api;
+pub mod monitor;
 
 use std::collections::VecDeque;
 use std::ffi::c_void;
@@ -151,6 +152,12 @@ pub struct BoostForegroundApp {
     pub process_id: u32,
 }
 
+impl BoostForegroundApp {
+    pub fn zeroed() -> Self {
+        Self { process_name: [0; 260], process_id: 0 }
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct BoostSampleResult {
@@ -178,6 +185,12 @@ pub struct BoostSampleResult {
     pub battery_remaining_min: i32,
 }
 
+impl BoostSampleResult {
+    pub fn zeroed() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct BoostEventData {
@@ -186,23 +199,24 @@ pub struct BoostEventData {
     pub kind: u32,
 }
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct BoostPumpResult {
-    pub uptime_ms: u64,
-    pub now_epoch_ms: u64,
-    pub count: u32,
-    /// 1 when events were drained.
-    pub flushed: u32,
-    pub next_poll_ms: u32,
+impl BoostEventData {
+    pub fn zeroed() -> Self {
+        Self { value: 0, now_epoch_ms: 0, kind: 0 }
+    }
+}
+
+impl BoostPumpResult {
+    pub fn zeroed() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub struct BoostIdleResult {
-    pub ok: i32,
-    pub idle_ms: u32,
-    pub now_epoch_ms: u64,
+impl BoostIdleResult {
+    pub fn zeroed() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
 }
 
 // ---------------------------------------------------------------------------

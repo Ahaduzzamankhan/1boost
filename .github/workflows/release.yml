@@ -1,9 +1,10 @@
-# 1Boost release pipeline.
+# 1Boost release pipeline (Tauri 2).
 #
-# Triggers on a version tag push (e.g. `v1.1.0`) or manually via workflow_dispatch.
-# Verifies the tag matches package.json, runs Rust + TS tests, builds the native
-# layer, packs the NSIS installer with electron-builder, and publishes a GitHub
-# Release with the installer attached.
+# Triggers on a version tag push (e.g. `v1.2.0`) or manually. Verifies the tag
+# matches package.json AND tauri.conf.json, runs Rust + TS tests, builds the
+# signed NSIS installer via tauri-action, generates the updater manifest
+# (latest.json), attaches installer + signature + manifest to the GitHub
+# Release, and publishes it with the changelog.
 
 name: Release
 
@@ -31,13 +32,21 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Verify tag matches package.json version
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            native
+            src-tauri
+
+      - name: Verify tag matches package.json and tauri.conf.json versions
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: |
           PKG_VERSION="v$(node -p "require('./package.json').version")"
-          if [ "$PKG_VERSION" != "${GITHUB_REF_NAME}" ]; then
-            echo "::error::Tag ${GITHUB_REF_NAME} does not match package.json version ${PKG_VERSION}"
+          TAURI_VERSION="v$(node -p "JSON.parse(require('fs').readFileSync('src-tauri/tauri.conf.json','utf8')).version")"
+          if [ "$PKG_VERSION" != "${GITHUB_REF_NAME}" ] || [ "$TAURI_VERSION" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match package.json ${PKG_VERSION} / tauri.conf.json ${TAURI_VERSION}"
             exit 1
           fi
 
@@ -60,43 +69,74 @@ jobs:
       - name: Run unit tests
         run: npm test
 
-      - name: Run Rust layout tests
-        working-directory: electron/native
+      - name: Run Rust tests (native crate)
+        working-directory: native
         run: cargo test --release
 
-      - name: Build native layer
-        run: npm run native:build
+      - name: Run Rust tests (Tauri backend crate)
+        working-directory: src-tauri
+        run: cargo test --lib --release
 
-      - name: Generate app icons (gitignored, required by electron-builder)
-        run: node scripts/make-icons.js
+      - name: Generate Tauri icon set
+        run: node scripts/make-tauri-icons.js
 
-      - name: Build renderer, main and preload
-        run: node scripts/build.mjs all
+      - name: Build renderer bundle
+        run: node scripts/build.mjs renderer
 
-      - name: Pack Windows installer (NSIS)
+      - name: Build signed Tauri NSIS release
+        uses: tauri-apps/tauri-action@v0
+        id: tauria
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx electron-builder --win nsis --x64 --publish always
-        # --publish always uploads the full update feed alongside the
-        # installer: 1Boost-Setup-<version>.exe, 1Boost-Setup-<version>.exe
-        # .blockmap (differential/delta source for electron-updater) and
-        # latest.yml. The release is created as a draft; the next step fills
-        # in the changelog and publishes it.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: '1Boost ${{ github.ref_name }}'
+          releaseDraft: true
+          prerelease: false
+          args: --target x86_64-pc-windows-msvc
 
-      - name: Add changelog to release
+      - name: Render changelog notes
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: node scripts/release-notes.mjs "${GITHUB_REF_NAME#v}" release-notes.md
+
+      - name: Generate updater manifest (latest.json)
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          node scripts/gen-latest-json.mjs "$VERSION" release-notes.md latest.json
+          # Find the NSIS installer + signature the tauri-action uploaded and
+          # inline the minisign signature into latest.json, then upload it.
           TAG="${GITHUB_REF_NAME}"
-          node scripts/release-notes.mjs "${TAG#v}" release-notes.md
-          # electron-builder already attached the .exe, .exe.blockmap (delta
-          # source) and latest.yml. Verify the blockmap is present so delta
-          # updates can never silently ship without it, then set the notes.
-          gh release view "$TAG" --json assets --jq '.assets[].name' | grep -q '\.exe\.blockmap$' \
-            || { echo '::error::blockmap missing from release assets'; exit 1; }
-          gh release edit "$TAG" --notes-file release-notes.md
+          EXE_NAME="1Boost-Setup-${VERSION}-x64-setup.exe"
+          SIG_NAME="${EXE_NAME}.sig"
+          gh release download "$TAG" --pattern "*.sig" --dir sigtmp
+          if [ ! -f "sigtmp/${SIG_NAME}" ]; then
+            # tauri-action may name files slightly differently; take any sig.
+            FIRST_SIG=$(ls sigtmp/*.sig 2>/dev/null | head -1 || true)
+            if [ -z "$FIRST_SIG" ]; then
+              echo "::error::no .sig updater signature found in release assets"
+              exit 1
+            fi
+            mv "$FIRST_SIG" "sigtmp/${SIG_NAME}"
+          fi
+          node - <<'EOF'
+          const fs = require('fs');
+          const m = JSON.parse(fs.readFileSync('latest.json', 'utf8'));
+          const sigFiles = fs.readdirSync('sigtmp').filter((f) => f.endsWith('.sig'));
+          m.platforms['windows-x86_64'].signature = fs.readFileSync(`sigtmp/${sigFiles[0]}`, 'utf8').trim();
+          const exe = sigFiles[0].replace(/\.sig$/, '');
+          m.platforms['windows-x86_64'].url =
+            `https://github.com/Ahaduzzamankhan/1boost/releases/download/${process.env.GITHUB_REF_NAME}/${exe}`;
+          fs.writeFileSync('latest.json', JSON.stringify(m, null, 2) + '\n');
+          console.log('latest.json ready for', m.version);
+          EOF
+          gh release upload "$TAG" latest.json --clobber
 
       - name: Publish release (stable) or mark prerelease (alpha/beta)
         if: startsWith(github.ref, 'refs/tags/v')
@@ -105,6 +145,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${GITHUB_REF_NAME}"
+          # Verify updater prerequisites: installer, signature, manifest.
+          ASSETS=$(gh release view "$TAG" --json assets --jq '.assets[].name')
+          echo "$ASSETS" | grep -q -- "-x64-setup\.exe$" || { echo '::error::installer missing'; exit 1; }
+          echo "$ASSETS" | grep -q '\.exe\.sig$' || { echo '::error::updater signature missing'; exit 1; }
+          echo "$ASSETS" | grep -q '^latest\.json$' || { echo '::error::latest.json missing'; exit 1; }
           if [ "$PRERELEASE" = "true" ]; then
             gh release edit "$TAG" --draft=false --prerelease --latest=false
           else
@@ -115,5 +160,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: 1Boost-Setup
-          path: release/**/*.exe
+          path: |
+            target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+            target/x86_64-pc-windows-msvc/release/bundle/nsis/*.sig
           if-no-files-found: error

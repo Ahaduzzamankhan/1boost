@@ -67,25 +67,25 @@
     }
   },
   "scripts": {
-    "native:build": "cargo build --release --manifest-path electron/native/Cargo.toml && node scripts/copy-native.mjs",
-    "dist": "npm run build && electron-builder --win nsis --x64",
-    "dist:portable": "npm run build && electron-builder --win portable --x64",
-    "native:build:dev": "cargo build --manifest-path electron/native/Cargo.toml && node scripts/copy-native.mjs",
-    "build:main": "node scripts/build.mjs main",
-    "build:preload": "node scripts/build.mjs preload",
+    "native:build": "cargo build --release --manifest-path native/Cargo.toml",
+    "native:build:dev": "cargo build --manifest-path native/Cargo.toml",
     "build:renderer": "node scripts/build.mjs renderer",
-    "build": "npm run typecheck && npm run native:build && npm run build:main && npm run build:preload && npm run build:renderer",
-    "dev": "node scripts/build.mjs all --watch",
-    "start": "electron .",
+    "build": "npm run typecheck && node scripts/build.mjs renderer",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "rust:test": "cargo test --release --manifest-path electron/native/Cargo.toml"
+    "rust:test": "cargo test --release --manifest-path native/Cargo.toml",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "icons:tauri": "node scripts/make-tauri-icons.js"
   },
   "dependencies": {
     "electron-updater": "^6.8.9",
     "koffi": "^3.3.2"
   },
   "devDependencies": {
+    "@tauri-apps/api": "^2.12.0",
+    "@tauri-apps/cli": "^2.12.0",
     "@types/node": "^22.10.0",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",

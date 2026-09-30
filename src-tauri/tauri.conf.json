@@ -1,0 +1,50 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "1Boost",
+  "version": "1.2.0",
+  "identifier": "com.ahaduzzamankhan.oneboost",
+  "build": {
+    "beforeDevCommand": "node scripts/build.mjs renderer",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "node scripts/build.mjs renderer",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://api.github.com https://github.com https://objects.githubusercontent.com ipc: http://ipc.localhost"
+    },
+    "trayIcon": {
+      "iconPath": "icons/tray.png",
+      "iconAsTemplate": false
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/icon.ico"],
+    "copyright": "Copyright © 2026 1Boost",
+    "category": "Productivity",
+    "shortDescription": "PC usage analytics for Windows",
+    "longDescription": "1Boost quietly tracks how long your PC is on, how much of that time you are actively using it, which applications you focus, and system vitals — all stored locally on your device.",
+    "windows": {
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": "http://timestamp.digicert.com",
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["English"],
+        "displayLanguageSelector": false
+      }
+    },
+    "createUpdaterArtifacts": "v1Compatible"
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZDNUE4NjBFNkU2M0IyNDgKUldSSXNtTnVEb1phYkQ0cFhMdGtud1J4WlRuWHkzVkd0VWkzU2YrcTdDRytENXNyZVd1S3VaaGkK",
+      "endpoints": [
+        "https://github.com/Ahaduzzamankhan/1boost/releases/latest/download/latest.json"
+      ]
+    }
+  }
+}

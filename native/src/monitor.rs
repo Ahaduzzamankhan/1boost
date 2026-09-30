@@ -173,6 +173,12 @@ use windows_sys::Win32::System::SystemInformation::{
 // (electron/main/native.ts, M / M_SIZE).
 // ---------------------------------------------------------------------------
 
+impl BoostMonitorResult {
+    pub fn zeroed() -> Self {
+        unsafe { std::mem::zeroed() }
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct BoostDriveInfo {

@@ -1,11 +1,13 @@
 [package]
 name = "oneboost-native"
-version = "1.1.6"
+version = "1.2.0"
 edition = "2021"
 
 [lib]
 name = "oneboost_native"
-crate-type = ["cdylib"]
+# cdylib: standalone oneboost_native.dll (kept for the Electron v1.1.x FFI
+# layout during the migration window). rlib: consumed by the Tauri backend.
+crate-type = ["cdylib", "rlib"]
 
 [profile.release]
 lto = true
@@ -13,6 +15,7 @@ codegen-units = 1
 strip = true
 
 [dependencies]
+serde = { version = "1", features = ["derive"] }
 windows-sys = { version = "0.52", features = [
   "Win32_Foundation",
   "Win32_System_LibraryLoader",
@@ -24,3 +27,6 @@ windows-sys = { version = "0.52", features = [
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_WindowsAndMessaging",
 ] }
+
+[dev-dependencies]
+serde_json = "1"

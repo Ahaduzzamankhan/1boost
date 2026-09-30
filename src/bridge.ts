@@ -1,11 +1,14 @@
 import type { Bridge, PageId, Prefs } from '../shared/types'
 
-/** Browser-harness only: matches package.json so About/Updates never lie. */
-const HARNESS_VERSION = '1.1.6'
+/**
+ * Browser-harness only: matches package.json so About/Updates never lie.
+ */
+const HARNESS_VERSION = '1.2.0'
 
 declare global {
   interface Window {
     oneboost?: Bridge
+    __TAURI_INTERNALS__?: unknown
   }
 }
 
@@ -33,9 +36,22 @@ export function accentRgba(a: Prefs['accent'], alpha: number): string {
 }
 
 /**
- * Browser dev-harness fallback so the UI can be exercised outside Electron.
- * It returns EMPTY data only (no invented statistics) and is never used inside
- * the packaged app, where window.oneboost always exists.
+ * Tauri IPC plumbing
+ * --------------------------------------------------------------------------- */
+
+type Cmd = (cmd: string, args?: Record<string, unknown>) => Promise<unknown>
+
+async function tauri(): Promise<{ invoke: Cmd; listen: (ev: string, cb: (e: { payload: unknown }) => void) => Promise<() => void> }> {
+  const core = (await import('@tauri-apps/api/core')) as { invoke: Cmd }
+  const ev = (await import('@tauri-apps/api/event')) as {
+    listen: (ev: string, cb: (e: { payload: unknown }) => void) => Promise<() => void>
+  }
+  return { invoke: core.invoke, listen: ev.listen }
+}
+
+/**
+ * Browser dev-harness fallback so the UI can be exercised outside Tauri.
+ * It returns EMPTY data only (no invented statistics).
  */
 function createBrowserHarnessBridge(): Bridge {
   const today = {
@@ -108,7 +124,7 @@ function createBrowserHarnessBridge(): Bridge {
       }
     },
     navigate: (page: PageId) => emit('page', page),
-    openAppDetail: () => undefined,
+    openAppDetail: (key: string) => emit('app', key),
     pageChanged: (cb) => {
       ;(listeners['page'] ??= []).push(cb as (...args: unknown[]) => void)
       return () => {
@@ -211,6 +227,96 @@ function createBrowserHarnessBridge(): Bridge {
   }
 }
 
-export const isElectronBackend = typeof window !== 'undefined' && !!window.oneboost
+// ---------------------------------------------------------------------------
+// Tauri bridge — 1:1 mapping of the Electron preload surface
+// ---------------------------------------------------------------------------
 
-export const bridge: Bridge = window?.oneboost ?? createBrowserHarnessBridge()
+function createTauriBridge(): Bridge {
+  let ready: ReturnType<typeof tauri> | null = null
+  const T = () => (ready ??= tauri())
+  const invoke: Cmd = (cmd, args) => T().then((t) => t.invoke(cmd, args))
+
+  /** Subscribe to a Rust event; returns the unsubscribe function. */
+  const on = async <T>(event: string, cb: (payload: T) => void) => {
+    const t = await T()
+    return t.listen(event, (e) => cb(e.payload as T))
+  }
+
+  /** Register-first helper so a push racing the subscribe is never missed.
+   *  Returns a synchronous unsubscribe (queued until listen resolves). */
+  async function listenBefore<T>(event: string, cb: (p: T) => void, after?: () => Promise<unknown>): Promise<() => void> {
+    const un = await on<T>(event, cb)
+    if (after) await after().catch(() => undefined)
+    return un
+  }
+
+  /** Bridge listeners must return () => void synchronously; queue until the
+   *  async listen() resolves so an early unsubscribe is still honored. */
+  function sub<T>(event: string, cb: (p: T) => void, after?: () => Promise<unknown>): () => void {
+    let un: (() => void) | null = null
+    let cancelled = false
+    void listenBefore(event, cb, after).then((u) => {
+      if (cancelled) u()
+      else un = u
+    })
+    return () => {
+      if (un) un()
+      else cancelled = true
+    }
+  }
+
+  return {
+    getInitial: () => invoke('get_initial') as Promise<Awaited<ReturnType<Bridge['getInitial']>>>,
+    getDashboard: () => invoke('get_dashboard') as Promise<Awaited<ReturnType<Bridge['getDashboard']>>>,
+    getMonitorSample: () => invoke('get_monitor_sample') as Promise<Awaited<ReturnType<Bridge['getMonitorSample']>>>,
+    monitor: (cb) => {
+      // Subscribe FIRST, then ask main for the seed sample (same ordering
+      // guarantee as the Electron preload).
+      return sub('oneboost://monitor', cb, () =>
+        invoke('monitor_subscribe').catch(() => undefined),
+      )
+    },
+    navigate: (page: PageId) => void invoke('navigate', { page }),
+    openAppDetail: (key: string) => void invoke('open_app_detail', { key }),
+    pageChanged: (cb) => sub<PageId>('oneboost://page-changed', cb),
+    appDetailOpened: (cb) => sub<string>('oneboost://app-detail', cb),
+    snapshot: (cb) => sub('oneboost://snapshot', cb),
+    onUsageUpdated: (cb) => sub('oneboost://usage-updated', cb),
+    getSettingsData: () => invoke('get_settings_data') as Promise<Awaited<ReturnType<Bridge['getSettingsData']>>>,
+    repairLaunch: () => invoke('repair_launch') as Promise<Awaited<ReturnType<Bridge['repairLaunch']>>>,
+    getUpdateState: () => invoke('get_update_state') as Promise<Awaited<ReturnType<Bridge['getUpdateState']>>>,
+    checkForUpdates: () => invoke('check_for_updates') as Promise<Awaited<ReturnType<Bridge['checkForUpdates']>>>,
+    installUpdate: () => invoke('install_update') as Promise<boolean>,
+    onUpdateState: (cb) => sub('oneboost://update-state', cb),
+    setPref: (key, value) =>
+      invoke('set_pref', { key, value }) as Promise<Prefs>,
+    notifyThemeClass: (glass) => invoke('notify_theme_class', { glass }) as Promise<void>,
+    exportJson: () => invoke('export_json') as Promise<Awaited<ReturnType<Bridge['exportJson']>>>,
+    clearData: () => invoke('clear_data') as Promise<{ ok: boolean; error?: string }>,
+    toast: (cb) => sub<string>('oneboost://toast', cb),
+    onPrefsChanged: (cb) => sub<Prefs>('oneboost://prefs-changed', cb),
+    minimize: () => void invoke('minimize_window'),
+    toggleMaximize: () => void invoke('toggle_maximize'),
+    close: () => void invoke('close_window'),
+    windowState: (cb) => sub('oneboost://window-state', cb),
+    isMaximized: () => invoke('is_maximized') as Promise<boolean>,
+    onOpenSettings: (cb) => sub('oneboost://open-settings', cb),
+    getAppsList: () => invoke('get_apps_list') as Promise<Awaited<ReturnType<Bridge['getAppsList']>>>,
+    getAppDetail: (key: string) => invoke('get_app_detail', { key }) as Promise<Awaited<ReturnType<Bridge['getAppDetail']>>>,
+    getStatsOverview: () => invoke('get_stats_overview') as Promise<Awaited<ReturnType<Bridge['getStatsOverview']>>>,
+    getTrend: (days: number) => invoke('get_trend', { days }) as Promise<Awaited<ReturnType<Bridge['getTrend']>>>,
+    getWeekdayAverages: () => invoke('get_weekday_averages') as Promise<Awaited<ReturnType<Bridge['getWeekdayAverages']>>>,
+    getHistoryPage: (offset: number, limit: number) =>
+      invoke('get_history_page', { offset, limit }) as Promise<Awaited<ReturnType<Bridge['getHistoryPage']>>>,
+    openDataFolder: () => void invoke('open_data_folder'),
+  }
+}
+
+export const isElectronBackend = typeof window !== 'undefined' && !!window.oneboost
+export const isTauriBackend =
+  typeof window !== 'undefined' &&
+  ('__TAURI_INTERNALS__' in window || 'isTauri' in window)
+
+export const bridge: Bridge = isTauriBackend
+  ? createTauriBridge()
+  : window?.oneboost ?? createBrowserHarnessBridge()
