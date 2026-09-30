@@ -70,7 +70,13 @@ pub struct NativeEvent {
 
 /// System monitoring snapshot. Unavailable metrics are `null` — the sentinel
 /// mapping the old TS FFI reader did now happens here, once, in Rust.
+///
+/// `rename_all = "camelCase"` is load-bearing: the renderer contract in
+/// `shared/types.ts` is camelCase (`usedBytes`, `tempC`, `downloadBps`), and
+/// serializing snake_case left every multi-word field `undefined` on the
+/// Monitor page while the single-word ones (usage, name, cores) kept working.
 #[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MonitorSample {
     pub ok: bool,
     pub now_ms: u64,
@@ -84,6 +90,7 @@ pub struct MonitorSample {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CpuInfo {
     /// 0..=100, or null while unavailable (e.g. first sample).
     pub usage: Option<f64>,
@@ -94,12 +101,14 @@ pub struct CpuInfo {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MemoryInfo {
     pub used_bytes: u64,
     pub total_bytes: u64,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GpuInfo {
     pub usage: Option<f64>,
     pub temp_c: Option<f64>,
@@ -109,6 +118,7 @@ pub struct GpuInfo {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DiskInfo {
     pub read_bps: Option<f64>,
     pub write_bps: Option<f64>,
@@ -116,6 +126,7 @@ pub struct DiskInfo {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NetworkInfo {
     pub download_bps: Option<f64>,
     pub upload_bps: Option<f64>,
@@ -123,6 +134,7 @@ pub struct NetworkInfo {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DriveInfo {
     pub letter: char,
     pub total_bytes: u64,
@@ -130,6 +142,7 @@ pub struct DriveInfo {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct OsInfo {
     pub name: String,
     pub version: String,
@@ -299,4 +312,70 @@ pub fn monitor_sample() -> Option<MonitorSample> {
 /// Release the shared PDH query. Safe to call multiple times.
 pub fn monitor_shutdown() {
     crate::monitor::oneboost_monitor_shutdown()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The renderer contract (`shared/types.ts`) is camelCase. Serializing
+    /// snake_case made every multi-word field undefined in the webview, which
+    /// is why the Monitor page only ever had CPU and GPU (both single-word
+    /// fields) and stopped updating: its `nowMs` de-dupe compared
+    /// `undefined === undefined` and dropped every sample after the first.
+    #[test]
+    fn monitor_sample_serializes_camel_case() {
+        let sample = MonitorSample {
+            ok: true,
+            now_ms: 1_700_000_000_000,
+            cpu: CpuInfo {
+                usage: Some(12.5),
+                temp_c: Some(48.0),
+                name: "Test CPU".into(),
+                cores: 8,
+            },
+            memory: MemoryInfo { used_bytes: 4, total_bytes: 8 },
+            gpu: GpuInfo {
+                usage: Some(3.0),
+                temp_c: None,
+                mem_used_bytes: 1,
+                mem_total_bytes: 2,
+                name: "Test GPU".into(),
+            },
+            disk: DiskInfo {
+                read_bps: Some(10.0),
+                write_bps: Some(20.0),
+                active_pct: Some(30.0),
+            },
+            network: NetworkInfo {
+                download_bps: Some(1.0),
+                upload_bps: Some(2.0),
+                interface: Some("Ethernet".into()),
+            },
+            drives: vec![DriveInfo { letter: 'C', total_bytes: 100, free_bytes: 40 }],
+            os: OsInfo { name: "Windows".into(), version: "11".into() },
+        };
+        let v = serde_json::to_value(&sample).expect("serialize");
+        let obj = v.as_object().unwrap();
+
+        for key in ["nowMs", "cpu", "memory", "gpu", "disk", "network", "drives", "os"] {
+            assert!(obj.contains_key(key), "missing camelCase key {key}");
+        }
+        assert_eq!(obj["cpu"]["tempC"], 48.0);
+        assert!(obj["cpu"]["temp_c"].is_null());
+        assert_eq!(obj["memory"]["usedBytes"], 4);
+        assert_eq!(obj["memory"]["totalBytes"], 8);
+        assert_eq!(obj["gpu"]["memUsedBytes"], 1);
+        assert_eq!(obj["gpu"]["memTotalBytes"], 2);
+        assert_eq!(obj["disk"]["readBps"], 10.0);
+        assert_eq!(obj["disk"]["writeBps"], 20.0);
+        assert_eq!(obj["disk"]["activePct"], 30.0);
+        assert_eq!(obj["network"]["downloadBps"], 1.0);
+        assert_eq!(obj["network"]["uploadBps"], 2.0);
+        assert_eq!(obj["drives"][0]["totalBytes"], 100);
+        assert_eq!(obj["drives"][0]["freeBytes"], 40);
+        // Single-word fields keep their name in both casings.
+        assert_eq!(obj["cpu"]["usage"], 12.5);
+        assert_eq!(obj["os"]["name"], "Windows");
+    }
 }

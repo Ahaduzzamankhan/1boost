@@ -4,6 +4,39 @@ All notable changes to 1Boost are documented here. The latest release's
 section is injected into the GitHub Release body by CI
 (`scripts/release-notes.mjs`).
 
+## [1.2.1] - 2026-09-30
+
+### Fixed
+
+- **Monitor page shows every metric again** — memory, disk activity,
+  download/upload and per-drive storage were missing because the native
+  monitoring payload was serialized in snake_case while the renderer expects
+  camelCase. Only the single-word fields (CPU/GPU usage, name, cores) had
+  matching names, so they were the only cards that rendered. The same missing
+  `nowMs` also made the page drop every live sample after the first, freezing
+  it on a stale reading.
+- **App icons come back** — two separate defects: the extracted icon PNGs were
+  written with the chunk CRC before the chunk type, so every icon was a
+  malformed file the webview drew as a broken image; and the bitmaps behind an
+  icon handle (which belong to the icon, not the caller) were being freed,
+  corrupting the Windows shell icon cache and making later lookups fail.
+- **Switching theme no longer kills the app** — a theme change used to destroy
+  and rebuild the window to change its transparency class, tearing down the
+  webview that issued the command (and with it the app). The window is now
+  created once and the theme is applied in place.
+
+### Changed
+
+- **Native Windows title bar** — 1Boost uses the real system frame again, so
+  window controls, snapping layouts and the taskbar preview behave normally.
+- **Bigger window** — opens at 1360×880 (was 1200×760) with a 1040×680
+  minimum, and the sidebar is a little wider.
+- Icons are now re-read for apps first seen in an earlier session: the
+  executable path is recorded per app, so an app's icon survives a restart
+  instead of reverting to the generic glyph.
+- The data file gains an optional `appPaths` map. Existing files keep loading
+  unchanged (the field is ignored when absent, and older builds ignore it).
+
 ## [1.2.0] - 2026-09-30
 
 ### Changed
