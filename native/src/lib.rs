@@ -205,6 +205,17 @@ impl BoostEventData {
     }
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct BoostPumpResult {
+    pub uptime_ms: u64,
+    pub now_epoch_ms: u64,
+    pub count: u32,
+    /// 1 when events were drained.
+    pub flushed: u32,
+    pub next_poll_ms: u32,
+}
+
 impl BoostPumpResult {
     pub fn zeroed() -> Self {
         unsafe { std::mem::zeroed() }
@@ -213,6 +224,12 @@ impl BoostPumpResult {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+pub struct BoostIdleResult {
+    pub ok: i32,
+    pub idle_ms: u32,
+    pub now_epoch_ms: u64,
+}
+
 impl BoostIdleResult {
     pub fn zeroed() -> Self {
         unsafe { std::mem::zeroed() }
