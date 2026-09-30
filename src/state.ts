@@ -61,6 +61,9 @@ export function useThemeEffects(prefs: Prefs | null): void {
     const glassy = prefs.theme === 'dark-glass' || prefs.theme === 'white-glass'
     root.dataset.glass = glassy ? '1' : '0'
     root.dataset.reducedMotion = prefs.reducedMotion ? 'true' : 'false'
+    // Tell the main process which window class (opaque vs transparent) the
+    // theme needs, so it can rebuild the window when the class flips.
+    void bridge.notifyThemeClass(glassy).catch(() => undefined)
     const hex = accentHex(prefs.accent)
     root.style.setProperty('--accent', hex)
     root.style.setProperty('--accent-strong', shade(hex, -18))

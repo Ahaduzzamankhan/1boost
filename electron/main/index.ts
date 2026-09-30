@@ -24,6 +24,7 @@ import {
   setWindowHooks,
   showMainWindow,
   setupAppMenu,
+  syncWindowGlass,
   updateTrayMenu,
 } from './window'
 
@@ -146,6 +147,12 @@ function applyPrefInternal(key: keyof Prefs, value: Prefs[keyof Prefs]): void {
   void storage.saveSettings()
   sendToWindow('oneboost:prefs-changed', next)
 
+  const glassy = next.theme === 'dark-glass' || next.theme === 'white-glass'
+  // Opaque (solid-theme) window ↔ transparent (glass) window is a class flip;
+  // Windows assigns transparency at creation, so rebuild the shell. Same-class
+  // changes (accent, transparency amount) never touch the window.
+  syncWindowGlass(glassy)
+
   if (key === 'pauseTracking') {
     setTrayState(next.pauseTracking, accentHex(next.accent))
     if (next.pauseTracking) tracker?.pause()
@@ -223,6 +230,10 @@ function registerIpc(): void {
     if (!allowed.includes(key as keyof Prefs)) throw new Error('Unknown setting: ' + key)
     applyPrefInternal(key as keyof Prefs, value as Prefs[keyof Prefs])
     return storage!.settings.prefs
+  })
+
+  ipcMain.handle('oneboost:theme-class', (_e, glass: unknown) => {
+    if (typeof glass === 'boolean') syncWindowGlass(glass)
   })
 
   ipcMain.handle('oneboost:export-json', async () => {

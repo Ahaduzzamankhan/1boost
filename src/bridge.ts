@@ -1,7 +1,7 @@
 import type { Bridge, PageId, Prefs } from '../shared/types'
 
 /** Browser-harness only: matches package.json so About/Updates never lie. */
-const HARNESS_VERSION = '1.1.5'
+const HARNESS_VERSION = '1.1.6'
 
 declare global {
   interface Window {
@@ -164,6 +164,7 @@ function createBrowserHarnessBridge(): Bridge {
       ;(prefs as unknown as Record<string, unknown>)[key] = value
       return prefs
     },
+    notifyThemeClass: async () => undefined,
     exportJson: async () => ({ ok: false }),
     clearData: async () => ({ ok: true }),
     toast: (cb) => {

@@ -318,6 +318,8 @@ export interface Bridge {
   installUpdate: () => Promise<boolean>
   onUpdateState: (cb: (s: UpdateState) => void) => () => void
   setPref: (key: string, value: string | number | boolean) => Promise<Prefs>
+  /** Renderer reports the current theme's window class (glass = transparent). */
+  notifyThemeClass: (glass: boolean) => Promise<void>
   exportJson: () => Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }>
   clearData: () => Promise<{ ok: boolean; error?: string }>
   toast: (cb: (msg: string) => void) => () => void

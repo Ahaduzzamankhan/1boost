@@ -398,6 +398,7 @@ button:focus-visible,
   flex: 1;
   min-width: 0;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: var(--space-8) var(--space-10);
 }
 
@@ -407,8 +408,9 @@ button:focus-visible,
   /* Opacity only: a transform here promoted every page to its own compositor
      layer above the window blur layer, which rendered corrupted (ghosted /
      torn frames) on transparent Windows windows. Fading is safe and looks
-     identical in practice. */
-  animation: pageIn var(--transition-normal) var(--ease);
+     identical in practice. The soft ease-out curve (vs the snappy --ease)
+     reads as a smoother entrance at opacity-only durations. */
+  animation: pageIn 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
   padding-bottom: var(--space-10);
 }
 
@@ -457,6 +459,15 @@ button:focus-visible,
   margin: var(--space-6) 0;
 }
 
+/* Grid tracks default to min-width:auto, so one unbreakable string (network
+   adapter descriptions run 60+ chars) forces the 1fr track wider than the
+   container and cards spill past the window edge. Letting items shrink
+   restores the layout; the text itself ellipsizes below. */
+.grid-metrics > *,
+.stat-grid > * {
+  min-width: 0;
+}
+
 @media (max-width: 1180px) {
   .grid-metrics {
     grid-template-columns: repeat(2, 1fr);
@@ -487,6 +498,10 @@ button:focus-visible,
   color: var(--text-secondary);
   margin-top: 2px;
   font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
 }
 
 /* Buttons */
@@ -739,6 +754,9 @@ button:focus-visible,
 
 .monitor-card .metric-value {
   font-size: 24px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .monitor-head {
@@ -746,6 +764,14 @@ button:focus-visible,
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
+  min-width: 0;
+}
+
+.monitor-head .metric-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .monitor-chip {
@@ -778,6 +804,7 @@ button:focus-visible,
   display: flex;
   align-items: center;
   gap: var(--space-3);
+  min-width: 0;
 }
 
 .drive-letter {
@@ -796,14 +823,14 @@ button:focus-visible,
   color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 1;
+  min-width: 0;
 }
 
 .monitor-card .metric-sub {
   min-height: 19px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 100%;
 }
 
 .chart-head {
@@ -1012,7 +1039,7 @@ button:focus-visible,
   display: grid;
   place-items: center;
   z-index: 100;
-  animation: fadeIn var(--transition-fast) var(--ease);
+  animation: fadeIn 160ms var(--ease) both;
 }
 
 @keyframes fadeIn {
@@ -1028,7 +1055,7 @@ button:focus-visible,
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-pop);
-  animation: modalIn var(--transition-normal) var(--ease);
+  animation: modalIn 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 @keyframes modalIn {
@@ -1067,7 +1094,7 @@ button:focus-visible,
   box-shadow: var(--shadow-pop);
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
-  animation: toastIn var(--transition-normal) var(--ease);
+  animation: toastIn 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
   max-width: 420px;
 }
 
@@ -1200,7 +1227,7 @@ button:focus-visible,
   box-shadow: var(--shadow-pop);
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
-  animation: ctxIn var(--transition-fast) var(--ease);
+  animation: ctxIn 150ms var(--ease) both;
 }
 
 @keyframes ctxIn {

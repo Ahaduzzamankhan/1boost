@@ -8,6 +8,38 @@ export interface LivePoint {
   v: number | null
 }
 
+/** Round to 2 decimals — keeps live path strings short at 60 samples. */
+const r2 = (v: number): number => Math.round(v * 100) / 100
+
+/**
+ * Smooth SVG path through the given points (Catmull-Rom → cubic bezier).
+ * Control points are clamped into the [min(p1.y,p2.y), max(p1.y,p2.y)] band,
+ * so the curve can never overshoot the sampled range — no phantom dips below
+ * 0 % or spikes above peaks between samples, which raw Catmull-Rom produces
+ * on spiky time-series. Vertices stay exactly on the samples.
+ */
+export function smoothLinePath(pts: { x: number; y: number }[]): string {
+  const n = pts.length
+  if (n === 0) return ''
+  if (n === 1) return `M ${r2(pts[0].x)} ${r2(pts[0].y)}`
+  let d = `M ${r2(pts[0].x)} ${r2(pts[0].y)}`
+  for (let i = 1; i < n; i++) {
+    const p1 = pts[i - 1]
+    const p2 = pts[i]
+    const p0 = pts[i - 2] ?? p1
+    const p3 = pts[i + 1] ?? p2
+    const dx = p2.x - p1.x
+    let c1y = p1.y + (p2.y - p0.y) / 6
+    let c2y = p2.y - (p3.y - p1.y) / 6
+    const lo = Math.min(p1.y, p2.y)
+    const hi = Math.max(p1.y, p2.y)
+    c1y = Math.max(lo, Math.min(hi, c1y))
+    c2y = Math.max(lo, Math.min(hi, c2y))
+    d += ` C ${r2(p1.x + dx / 3)} ${r2(c1y)}, ${r2(p2.x - dx / 3)} ${r2(c2y)}, ${r2(p2.x)} ${r2(p2.y)}`
+  }
+  return d
+}
+
 interface Tooltip {
   x: number
   y: number
@@ -75,19 +107,7 @@ export function TrendChart({
 
   const path = (accessor: (p: TrendPoint) => number) => {
     if (points.length === 0) return ''
-    if (points.length === 1) {
-      return `M ${x(0)} ${y(accessor(points[0]))}`
-    }
-    let d = `M ${x(0)} ${y(accessor(points[0]))}`
-    for (let i = 1; i < points.length; i++) {
-      const x0 = x(i - 1)
-      const y0 = y(accessor(points[i - 1]))
-      const x1 = x(i)
-      const y1 = y(accessor(points[i]))
-      const cx = (x0 + x1) / 2
-      d += ` C ${cx} ${y0}, ${cx} ${y1}, ${x1} ${y1}`
-    }
-    return d
+    return smoothLinePath(points.map((p, i) => ({ x: x(i), y: y(accessor(p)) })))
   }
 
   const areaD = () => {
@@ -326,25 +346,37 @@ export function LiveAreaChart({
   const y = (v: number) => PADT + innerH - (Math.max(0, v) / yMax) * innerH
 
   // Build path segments, breaking at null (unavailable) values; each segment
-  // remembers its first/last index so its area fill closes correctly.
+  // remembers its first/last index so its area fill closes correctly. Lines
+  // are smoothed (clamped Catmull-Rom) so live updates read as flowing curves
+  // instead of jagged polylines — values themselves are untouched.
   const segments = useMemo(() => {
-    const segs: { d: string; start: number; end: number }[] = []
-    let cur = ''
+    const segs: { d: string; areaD: string; start: number; end: number }[] = []
+    let pts: { x: number; y: number }[] = []
     let start = -1
     let last = -1
+    const flush = () => {
+      if (start >= 0 && pts.length > 0) {
+        const d = smoothLinePath(pts)
+        segs.push({
+          d,
+          areaD: `${d} L ${x(last)} ${PADT + innerH} L ${x(start)} ${PADT + innerH} Z`,
+          start,
+          end: last,
+        })
+      }
+      pts = []
+      start = -1
+    }
     points.forEach((p, i) => {
       if (p.v == null) {
-        if (start >= 0) segs.push({ d: cur, start, end: last })
-        cur = ''
-        start = -1
+        flush()
         return
       }
       if (start < 0) start = i
       last = i
-      const cmd = cur === '' ? 'M' : 'L'
-      cur += `${cmd} ${x(i)} ${y(p.v)}`
+      pts.push({ x: x(i), y: y(p.v) })
     })
-    if (start >= 0) segs.push({ d: cur, start, end: last })
+    flush()
     return segs
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [points, yMax, cap])
@@ -372,7 +404,7 @@ export function LiveAreaChart({
             {segments.map((s, si) => (
               <path
                 key={`a${si}`}
-                d={`${s.d} L ${x(s.end)} ${PADT + innerH} L ${x(s.start)} ${PADT + innerH} Z`}
+                d={s.areaD}
                 fill="url(#liveFill)"
                 stroke="none"
               />

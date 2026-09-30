@@ -60,6 +60,7 @@ const api = {
   },
   setPref: (key: string, value: string | number | boolean) =>
     ipcRenderer.invoke('oneboost:set-pref', key, value),
+  notifyThemeClass: (glass: boolean) => ipcRenderer.invoke('oneboost:theme-class', !!glass),
   exportJson: () => ipcRenderer.invoke('oneboost:export-json'),
   clearData: () => ipcRenderer.invoke('oneboost:clear-data'),
   toast: (cb: (msg: string) => void) => {

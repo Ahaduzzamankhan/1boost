@@ -4,6 +4,30 @@ All notable changes to 1Boost are documented here. The latest release's
 section is injected into the GitHub Release body by CI
 (`scripts/release-notes.mjs`).
 
+## [1.1.6] - 2026-09-30
+
+### Fixed
+
+- **Monitor layout** — cards no longer spill past the window edge: grid items
+  shrink properly now and long strings (network adapter descriptions like
+  "Realtek PCIe GbE Family Controller-WFP Native MAC Layer LightWeight
+  Filter-0000", drive usage lines) ellipsize instead of forcing the columns
+  wider than the page.
+- **Smooth live graphs** — monitor charts draw smoothed, clamped Catmull-Rom
+  curves instead of jagged polylines (the trend chart uses the same math, so
+  curves stay on their samples and can never overshoot peaks).
+- **Smoother app-wide animation** — page/modal/toast entrances use a soft
+  ease-out curve instead of the snappy UI easing; still opacity-only, so the
+  transparent-glass rendering stays stable.
+- **Native rounded corners + window animations** — the frameless window now
+  asks DWM for real Win11 rounded corners and re-enables the native
+  minimize/restore animations. Solid themes (Solid Dark / Solid White /
+  AMOLED) additionally get a normal opaque window — Windows only assigns
+  transparency at creation, and opaque windows take the full native corner,
+  shadow and animation treatment (glass themes keep the CSS radius, which DWM
+  refuses on transparent windows). Switching between a glass and a solid
+  theme rebuilds the window shell, preserving size and maximize state.
+
 ## [1.1.5] - 2026-09-29
 
 ### Fixed

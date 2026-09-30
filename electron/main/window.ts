@@ -8,19 +8,88 @@ import {
   nativeImage,
   Tray,
 } from 'electron'
+import koffi from 'koffi'
 import { join } from 'node:path'
-import type { PageId } from '../../shared/types'
+import type { PageId, Prefs } from '../../shared/types'
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let quitting = false
 let startHidden = false
 
+// ---------------------------------------------------------------------------
+// Native Win11 window chrome (DWM, via koffi)
+// ---------------------------------------------------------------------------
+
+const DWMWA_WINDOW_CORNER_PREFERENCE = 33
+const DWMWCP_ROUND = 2
+const DWMWA_TRANSITIONS_FORCEDISABLED = 3
+
+type DwmApi = { setAttribute: (hwnd: bigint, attr: number, value: Buffer) => number }
+let dwm: DwmApi | null | undefined
+
+function getDwm(): DwmApi | null {
+  if (dwm !== undefined) return dwm
+  dwm = null
+  if (process.platform !== 'win32') return null
+  try {
+    const lib = koffi.load('dwmapi.dll')
+    const set = lib.func('DwmSetWindowAttribute', 'int32', ['intptr', 'uint32', 'void *', 'uint32'])
+    dwm = { setAttribute: (hwnd, attr, value) => set(hwnd, attr, value, value.length) }
+  } catch (e) {
+    console.warn('[1boost] dwmapi.dll unavailable; using CSS-only window chrome:', String(e))
+  }
+  return dwm
+}
+
+/**
+ * Ask DWM for native Win11 rounded corners and enable the classic
+ * minimize/maximize/restore animations for the frameless window. Both calls
+ * are best-effort: DWM declines to round fully transparent windows (the glass
+ * themes keep their CSS radius on `.app`), and on older Windows builds the
+ * attributes simply do not exist.
+ */
+function applyNativeWindowChrome(win: BrowserWindow): void {
+  const api = getDwm()
+  if (!api || win.isDestroyed()) return
+  try {
+    const hbuf = win.getNativeWindowHandle()
+    if (!hbuf || hbuf.length < 8) return
+    const hwnd = hbuf.readBigUInt64LE(0)
+    const round = Buffer.alloc(4)
+    round.writeUInt32LE(DWMWCP_ROUND, 0)
+    api.setAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, round)
+    // 0 = do NOT force-disable transitions → native min/restore animations.
+    api.setAttribute(hwnd, DWMWA_TRANSITIONS_FORCEDISABLED, Buffer.alloc(4))
+  } catch {
+    /* cosmetic only */
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Theme-aware transparency
+// ---------------------------------------------------------------------------
+
+const GLASS_THEMES = new Set(['dark-glass', 'white-glass'])
+const SOLID_BACKDROPS: Record<string, string> = {
+  'solid-dark': '#0a0c10',
+  'solid-white': '#f7f8fa',
+  amoled: '#000000',
+}
+
+function isGlassTheme(theme?: string): boolean {
+  return theme ? GLASS_THEMES.has(theme) : true
+}
+
+/** Tracks the transparency class the current window was created with. */
+let currentGlass: boolean | null = null
+
 export interface WindowHooks {
   navigate: (page: PageId) => void
   onTrayPauseToggle: () => void
   onExit: () => void
-  prefs: () => { startMinimized: boolean; showTray: boolean; reducedMotion: boolean; accent: string }
+  /** Full prefs (the window needs `theme` to pick its transparency class). */
+  prefs: () => Prefs
   version: () => string
   dataDir: () => string
   openDataFolder: () => void
@@ -61,9 +130,14 @@ export function toggleMainWindow(): void {
 
 export function createMainWindow(): BrowserWindow {
   const preloader = join(__dirname, '../preload/index.cjs')
-  // Glass themes need a genuinely transparent window; solid themes paint
-  // their own full-bleed background so transparency is harmless there.
-  const transparent = true
+  // Glass themes need a genuinely transparent window for the desktop blur.
+  // Solid themes get a normal opaque window instead: Windows only assigns
+  // transparency at creation, and an opaque frameless window unlocks the
+  // native DWM rounded corners, the native min/restore animations and a much
+  // smoother compositor path (the old always-transparent window caused jank).
+  const theme = hooks?.prefs?.().theme
+  const glass = isGlassTheme(theme)
+  const transparent = glass
   const win = new BrowserWindow({
     width: 1200,
     height: 760,
@@ -71,7 +145,7 @@ export function createMainWindow(): BrowserWindow {
     minHeight: 600,
     show: false,
     frame: false,
-    backgroundColor: transparent ? '#00000000' : '#0a0c10',
+    backgroundColor: transparent ? '#00000000' : SOLID_BACKDROPS[theme ?? ''] ?? '#0a0c10',
     transparent,
     title: '1Boost',
     icon: getIconPath(),
@@ -85,6 +159,7 @@ export function createMainWindow(): BrowserWindow {
       backgroundThrottling: false,
     },
   })
+  currentGlass = glass
 
   win.setMenuBarVisibility(false)
   // Renderer lives in <root>/dist; main bundle is dist-electron/main.
@@ -106,6 +181,7 @@ export function createMainWindow(): BrowserWindow {
     }
   })
 
+  applyNativeWindowChrome(win)
   applyRoundedCorners(win)
 
   mainWindow = win
@@ -113,9 +189,53 @@ export function createMainWindow(): BrowserWindow {
 }
 
 /**
+ * Renderer reports the glass/solid theme class after every prefs change. A
+ * flip between the classes needs the opposite window transparency, which
+ * Windows only assigns at window creation — so rebuild the shell (bounds,
+ * maximize state and tray survive; the page reloads, which a theme flip
+ * already visually implies).
+ */
+export function syncWindowGlass(glass: boolean): void {
+  if (currentGlass === null || glass === currentGlass) return
+  currentGlass = glass
+  // Recreate on a later turn: theme changes usually arrive through the
+  // oneboost:set-pref invoke, and destroying the invoking WebContents before
+  // its IPC reply is flushed can surface "object destroyed" noise. Deferring
+  // lets the reply (and the prefs-changed push) land first.
+  setTimeout(() => recreateMainWindow(), 120)
+}
+
+export function recreateMainWindow(): void {
+  const old = mainWindow
+  if (!old) {
+    createMainWindow()
+    return
+  }
+  const wasMaximized = old.isMaximized()
+  const bounds = old.getBounds()
+  // destroy() (not close()) skips the hide-to-tray interception.
+  old.destroy()
+  mainWindow = null
+  // Restore geometry while hidden, BEFORE ready-to-show shows the window —
+  // adjusting bounds afterwards would visibly snap from the default size.
+  const win = createMainWindow()
+  if (win.isDestroyed()) return
+  if (wasMaximized) win.maximize()
+  else win.setBounds(bounds)
+  // createMainWindow() suppresses show() when the app was launched with
+  // --hidden; a recreated window means the user is actively using it, so
+  // always surface it (its own ready-to-show handler is a no-op then).
+  if (startHidden) {
+    win.once('ready-to-show', () => {
+      if (!win.isDestroyed()) win.show()
+    })
+  }
+}
+
+/**
  * Rounded window shell, kept in sync with the maximize state:
- *  - the frameless transparent window gets visible rounded corners from the
- *    CSS radius on `.app` (index.css); DWM never rounds transparent windows,
+ *  - opaque (solid-theme) windows get real DWM rounding (above); transparent
+ *    glass windows get the CSS radius on `.app` (index.css),
  *  - `data-win-max` on the document root collapses the radius when maximized
  *    so content reaches the true screen edges,
  *  - the same push drives the titlebar maximize/restore icon via the existing
