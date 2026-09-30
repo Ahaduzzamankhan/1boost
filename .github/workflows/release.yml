@@ -152,6 +152,17 @@ jobs:
       - name: Build renderer bundle
         run: node scripts/build.mjs renderer
 
+      # Rendered before the build so tauri-action can use it as the release
+      # body. Falls back to package.json's version for non-tag runs.
+      - name: Render changelog notes
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+'; then
+            VERSION=$(node -p "require('./package.json').version")
+          fi
+          node scripts/release-notes.mjs "$VERSION" release-notes.md
+
       - name: Build signed Tauri NSIS release
         uses: tauri-apps/tauri-action@v0
         id: tauria
@@ -164,13 +175,9 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: '1Boost ${{ github.ref_name }}'
           releaseDraft: true
+          releaseBody: release-notes.md
           prerelease: false
           args: --target x86_64-pc-windows-msvc
-
-      - name: Render changelog notes
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: bash
-        run: node scripts/release-notes.mjs "${GITHUB_REF_NAME#v}" release-notes.md
 
       - name: Generate updater manifest (latest.json)
         if: startsWith(github.ref, 'refs/tags/v')
@@ -257,7 +264,7 @@ jobs:
         with:
           name: 1Boost-Setup
           path: |
-            target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
-            target/x86_64-pc-windows-msvc/release/bundle/nsis/*.zip
-            target/x86_64-pc-windows-msvc/release/bundle/nsis/*.sig
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.zip
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.sig
           if-no-files-found: error
