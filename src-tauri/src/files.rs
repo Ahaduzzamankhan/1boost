@@ -10,12 +10,12 @@ use serde::Serialize;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 const MAX_DEPTH: usize = 4;
 const MAX_ENTRIES: usize = 4000;
 const MAX_SEARCH_RESULTS: usize = 200;
-const CACHE_TTL_MS: u128 = 20_000;
+const CACHE_TTL_MS: u64 = 20_000;
 /// Skip these on every walk: they are large, slow, and never interesting.
 const SKIP_DIRS: &[&str] = &[
     "node_modules",
@@ -84,7 +84,7 @@ impl FileIndex {
             if !root.exists {
                 continue;
             }
-            walk(&root.path, root.label.clone(), 0, &mut out);
+            walk(&root.path, root.label.clone(), 0, &mut HashSet::new(), &mut out);
         }
         out.sort_by(|a, b| b.modified_ms.cmp(&a.modified_ms));
         out.truncate(MAX_ENTRIES);
@@ -112,8 +112,6 @@ impl Default for FileIndex {
     }
 }
 
-type Duration = std::time::Duration;
-
 /// The shell's known folders, resolved from the user's profile.
 pub fn roots() -> Vec<RootFolder> {
     let profile = std::env::var_os("USERPROFILE").map(PathBuf::from);
@@ -139,12 +137,20 @@ pub fn roots() -> Vec<RootFolder> {
     out
 }
 
-fn walk(dir: &str, folder: String, depth: usize, out: &mut Vec<FileEntry>) {
+/// `seen` is threaded through the recursion (rather than created per call) so
+/// the cycle guard actually covers the whole walk: Windows junctions can point
+/// back at an ancestor and would otherwise eat the entry budget.
+fn walk(
+    dir: &str,
+    folder: String,
+    depth: usize,
+    seen: &mut HashSet<PathBuf>,
+    out: &mut Vec<FileEntry>,
+) {
     if depth > MAX_DEPTH || out.len() >= MAX_ENTRIES {
         return;
     }
     let Ok(entries) = fs::read_dir(dir) else { return };
-    let mut seen: HashSet<PathBuf> = HashSet::new();
     for entry in entries.flatten() {
         if out.len() >= MAX_ENTRIES {
             return;
@@ -160,19 +166,16 @@ fn walk(dir: &str, folder: String, depth: usize, out: &mut Vec<FileEntry>) {
             if !seen.insert(path.clone()) {
                 continue;
             }
-            walk(&path.display().to_string(), folder.clone(), depth + 1, out);
+            walk(&path.display().to_string(), folder.clone(), depth + 1, seen, out);
         } else if meta.is_file() {
+            // 0 when the filesystem cannot report it, matching the documented
+            // contract -- these sort last rather than masquerading as "now".
             let modified_ms = meta
                 .modified()
                 .ok()
                 .and_then(|m| m.duration_since(UNIX_EPOCH).ok())
                 .map(|d| d.as_millis() as u64)
-                .unwrap_or_else(|| {
-                    SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .map(|d| d.as_millis() as u64)
-                        .unwrap_or(0)
-                });
+                .unwrap_or(0);
             out.push(FileEntry {
                 ext: path
                     .extension()
@@ -182,7 +185,7 @@ fn walk(dir: &str, folder: String, depth: usize, out: &mut Vec<FileEntry>) {
                 path: path.display().to_string(),
                 modified_ms,
                 size: meta.len(),
-                folder,
+                folder: folder.clone(),
             });
         }
     }
@@ -196,7 +199,7 @@ pub fn is_openable(path: &str) -> bool {
     if !p.is_absolute() {
         return false;
     }
-    let Ok(text) = path.to_lowercase() else { return false };
+    let text = path.to_lowercase();
     // Refuse anything that is not a plain file.
     p.is_file()
         && !text.starts_with("\\\\")
@@ -247,6 +250,30 @@ mod tests {
             .count();
         assert_eq!(matched, 1);
         assert!(idx.search("   ", true).is_empty());
+    }
+
+    #[test]
+    fn walk_labels_entries_and_skips_noise_directories() {
+        let base = std::env::temp_dir().join(format!("1boost-files-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(base.join("docs").join("node_modules")).unwrap();
+        fs::write(base.join("docs").join("real.txt"), b"hello").unwrap();
+        fs::write(base.join("docs").join("node_modules").join("skipme.txt"), b"x").unwrap();
+
+        let mut out = Vec::new();
+        walk(
+            &base.display().to_string(),
+            "Documents".into(),
+            0,
+            &mut HashSet::new(),
+            &mut out,
+        );
+
+        let names: Vec<&str> = out.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&"real.txt"), "found {:?}", names);
+        assert!(!names.contains(&"skipme.txt"), "node_modules is skipped");
+        assert!(out.iter().all(|e| e.folder == "Documents"), "entries carry the root label");
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]
