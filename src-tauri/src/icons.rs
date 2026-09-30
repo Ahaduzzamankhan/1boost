@@ -228,12 +228,16 @@ fn crc32(buf: &[u8]) -> u32 {
     !crc
 }
 
+/// Append one PNG chunk. The on-disk order is length, type, data, CRC — the
+/// CRC comes *last*. Writing it before the type produced chunks no decoder
+/// would accept, which is why extracted icons rendered as broken images.
 fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
     out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+    out.extend_from_slice(kind);
+    out.extend_from_slice(data);
     let mut body = kind.to_vec();
     body.extend_from_slice(data);
     out.extend_from_slice(&crc32(&body).to_be_bytes());
-    out.extend_from_slice(&body);
 }
 
 /// PNG with stored (uncompressed) deflate blocks — valid, simple, tiny input.
@@ -291,26 +295,43 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rejects_non_exe_paths() {
+    fn only_executables_are_icon_candidates() {
         assert!(extract_icon_png_data_url("").is_none());
         assert!(extract_icon_png_data_url("C:\\Windows\\System32\\notepad.dll").is_none());
-        assert!(!is_icon_candidate("C:\\x\\app.exe"));
+        assert!(is_icon_candidate("C:\\x\\app.exe"));
         assert!(is_icon_candidate("C:\\x\\APP.EXE"));
+        assert!(!is_icon_candidate("C:\\x\\app.dll"));
     }
 
     #[test]
-    fn encoder_produces_a_complete_png() {
+    fn encoder_produces_a_well_formed_png() {
         let pixels = vec![7u8; (WIDTH * HEIGHT * 4) as usize];
         let png = encode_png(WIDTH as u32, HEIGHT as u32, &pixels);
+
         assert_eq!(&png[..8], &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]);
-        // IHDR payload: width/height 32, 8-bit RGBA.
+
+        // Walk every chunk: length, type, data, CRC — in that order.
+        let mut at = 8usize;
+        let mut seen: Vec<&[u8]> = Vec::new();
+        while at < png.len() {
+            let len = u32::from_be_bytes(png[at..at + 4].try_into().unwrap()) as usize;
+            let kind = &png[at + 4..at + 8];
+            let data = &png[at + 8..at + 8 + len];
+            let crc = &png[at + 8 + len..at + 12 + len];
+            let mut body = kind.to_vec();
+            body.extend_from_slice(data);
+            assert_eq!(crc32(&body).to_be_bytes(), crc, "bad CRC on chunk");
+            seen.push(kind);
+            at += 12 + len;
+        }
+        assert_eq!(at, png.len(), "trailing bytes after the last chunk");
+        assert_eq!(seen, vec![&b"IHDR"[..], &b"IDAT"[..], &b"IEND"[..]]);
+
+        // IHDR payload: 32x32, 8-bit RGBA, no interlace.
         assert_eq!(&png[16..20], &32u32.to_be_bytes());
         assert_eq!(&png[20..24], &32u32.to_be_bytes());
         assert_eq!(png[24], 8);
         assert_eq!(png[25], 6);
-        // Must end with a complete IEND chunk: 4-byte length + "IEND" + CRC.
-        assert_eq!(&png[png.len() - 12..png.len() - 8], &[0, 0, 0, 0]);
-        assert_eq!(&png[png.len() - 8..png.len() - 4], b"IEND");
     }
 
     #[test]
