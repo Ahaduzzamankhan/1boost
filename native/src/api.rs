@@ -8,7 +8,7 @@
 use crate::monitor::BoostMonitorResult;
 use crate::{
     BoostIdleResult, BoostPumpResult, BoostSampleResult, EV_SLEEP, EV_SHUTDOWN,
-}
+};
 
 /// One tracking sample (foreground app, input idle, power state).
 /// Mirrors shared/types.ts `BoostSample`. `process_name` is the full image
