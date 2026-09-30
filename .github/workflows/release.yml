@@ -39,25 +39,6 @@ jobs:
             native
             src-tauri
 
-      # Signing keys pasted into GitHub secrets often pick up CR/LF, stray
-      # whitespace, or arrive as the whole minisign file (with its
-      # "untrusted comment:" header line), which makes the Tauri signer fail
-      # with "Invalid input for the given encoding". Keep only the base64
-      # key line and strip all whitespace before the build consumes them.
-      - name: Normalize signing key secrets (strip CR/LF/whitespace)
-        shell: bash
-        run: |
-          KEY_RAW="${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}"
-          KEY_CLEAN=$(printf '%s\n' "$KEY_RAW" | grep -E '^[A-Za-z0-9+/]+={0,2}[[:space:]]*$' | tail -1 | tr -d ' \t\r\n')
-          if [ -z "$KEY_CLEAN" ]; then
-            KEY_CLEAN=$(printf '%s' "$KEY_RAW" | tr -d ' \t\r\n')
-          fi
-          PASS_CLEAN=$(printf '%s' "${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}" | tr -d ' \t\r\n')
-          {
-            echo "TAURI_SIGNING_PRIVATE_KEY=$KEY_CLEAN"
-            echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$PASS_CLEAN"
-          } >> "$GITHUB_ENV"
-
       - name: Verify tag matches package.json and tauri.conf.json versions
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
@@ -81,6 +62,55 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      # The updater private key is one line of base64 that is easy to mangle
+      # when it is pasted: CRLF line endings, a line-wrapped value, a lost or
+      # duplicated character in a repetitive run, or a whole minisign file
+      # (which appends the *public* key line). Any of those produce the opaque
+      # "incorrect updater private key password: Invalid input for the given
+      # encoding" from the signer — after a six minute Rust build.
+      #
+      # Normalize the value, check it against the SHA-256 fingerprint of the
+      # keypair whose public half is committed in src-tauri/tauri.conf.json,
+      # then prove the password actually decrypts it. This fails in seconds.
+      - name: Prepare and verify updater signing key
+        shell: bash
+        env:
+          RAW_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          RAW_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          EXPECTED_SHA256='1ce293b039296d68406a91fc44386c4df02c3b5a7eb2e79393816d6b6b9e07fd'
+          EXPECTED_LENGTH=348
+          # Join every base64-only line (repairs wrapping) and clamp to the
+          # key length (drops the public key line of a whole-file paste).
+          KEY_ALL=$(printf '%s\n' "$RAW_KEY" | tr -d '\r' | grep -E '^[A-Za-z0-9+/]+={0,2}[[:space:]]*$' | tr -d ' \t\n' || true)
+          KEY_CLEAN=$(printf '%s' "$KEY_ALL" | cut -c1-"$EXPECTED_LENGTH")
+          PASS_CLEAN=$(printf '%s' "$RAW_PASSWORD" | tr -d '\r\n')
+          if [ -z "$KEY_CLEAN" ] || [ -z "$PASS_CLEAN" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY / _PASSWORD secrets are empty"
+            exit 1
+          fi
+          ACTUAL_SHA256=$(printf '%s' "$KEY_CLEAN" | sha256sum | cut -d' ' -f1)
+          echo "signing secret: ${#KEY_CLEAN} chars, sha256 $ACTUAL_SHA256"
+          if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is not the v1.2.0 signing key: expected sha256 $EXPECTED_SHA256 ($EXPECTED_LENGTH chars), got $ACTUAL_SHA256 (${#KEY_CLEAN} chars). Re-paste it as one unbroken base64 line with no header."
+            exit 1
+          fi
+          PROBE_DIR="$RUNNER_TEMP/keyprobe"
+          mkdir -p "$PROBE_DIR"
+          printf '%s' "$KEY_CLEAN" > "$PROBE_DIR/oneboost.key"
+          printf '1boost-signing-probe' > "$PROBE_DIR/probe.bin"
+          if ! npx --no-install tauri signer sign -p "$PASS_CLEAN" -f "$PROBE_DIR/oneboost.key" "$PROBE_DIR/probe.bin" > "$PROBE_DIR/sign.log" 2>&1; then
+            cat "$PROBE_DIR/sign.log"
+            echo "::error::key fingerprint matched but TAURI_SIGNING_PRIVATE_KEY_PASSWORD could not decrypt it"
+            exit 1
+          fi
+          echo "updater signing key verified (password opens the committed keypair)"
+          {
+            echo "TAURI_SIGNING_PRIVATE_KEY=$KEY_CLEAN"
+            echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$PASS_CLEAN"
+          } >> "$GITHUB_ENV"
 
       - name: Typecheck
         run: npm run typecheck
