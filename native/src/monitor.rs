@@ -356,7 +356,7 @@ unsafe fn reg_read_string(subkey: &str, value: &str) -> Option<String> {
 /// CPU name, core count, GPU name and OS strings — read once at first sample.
 fn init_names() -> ([u16; 64], u32, [u16; 96], [u16; 96], [u16; 64]) {
     let mut cpu_name = [0u16; 64];
-    let mut cpu_cores: u32 = 0;
+    let mut cpu_cores: u32;
     let mut gpu_name = [0u16; 96];
     let mut os_name = [0u16; 96];
     let mut os_version = [0u16; 64];
@@ -738,7 +738,6 @@ fn monitor_sample_inner(out: &mut BoostMonitorResult) -> i32 {
     if state.pdh.is_none() {
         state.pdh = PdhCounters::open();
     }
-    let mut pdh_ok = false;
     let mut gpu_util: Option<f64> = None;
     let mut gpu_mem: Option<f64> = None;
     let mut disk_read: Option<f64> = None;
@@ -746,7 +745,7 @@ fn monitor_sample_inner(out: &mut BoostMonitorResult) -> i32 {
     let mut disk_idle: Option<f64> = None;
     let mut temp: Option<f64> = None;
     if let Some(pdh) = state.pdh.as_ref() {
-        pdh_ok = unsafe { PdhCollectQueryData(pdh.query) } == ERROR_SUCCESS;
+        let pdh_ok = unsafe { PdhCollectQueryData(pdh.query) } == ERROR_SUCCESS;
         if pdh_ok {
             unsafe {
                 if pdh.has_gpu_util {

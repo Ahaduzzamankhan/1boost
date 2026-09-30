@@ -4,6 +4,42 @@ All notable changes to 1Boost are documented here. The latest release's
 section is injected into the GitHub Release body by CI
 (`scripts/release-notes.mjs`).
 
+## [1.2.0] - 2026-09-30
+
+### Changed
+
+- **Tauri 2 migration** — 1Boost now runs on Tauri 2 with the system WebView2
+  instead of Electron. The React UI, themes, features and the Rust monitoring
+  layer are unchanged; the same `%APPDATA%\1Boost` data and settings files
+  are picked up in place, and the app identity (`com.ahaduzzamankhan.oneboost`)
+  and installer identity ("1Boost") are preserved.
+- The Rust monitoring crate (`native/`) now links directly into the Tauri
+  backend — no more koffi FFI, DLL loading or DataView struct offsets. The
+  FFI exports and layout tests are kept for the migration window.
+- Tracking, storage (atomic writes + rolling backups + corruption recovery),
+  launch-at-login (same HKCU Run key, repairs stale Electron paths), tray,
+  custom context menu, frameless titlebar (drag via the native API instead of
+  `-webkit-app-region`) and the glass/solid theme window classes all moved
+  into the Rust backend.
+- Native Win11 rounded corners and minimize/restore animations are applied
+  via DWM from Rust; solid themes get an opaque window (full native chrome),
+  glass themes stay transparent with the CSS radius.
+
+### Added
+
+- **Signed delta-free updater** — updates ship through Tauri's signed updater
+  (`latest.json` + minisign signature on GitHub Releases); stable installs
+  never see prereleases and prerelease builds converge back to stable.
+- Rust unit tests for day-key/civil-date math and the aggregation port; the
+  TS suite still covers the same aggregation semantics.
+
+### Breaking
+
+- **One-time install** — the Tauri updater cannot update an app installed by
+  a different framework, so users on 1.1.x install 1.2.0 once; data and
+  settings carry over automatically. From 1.2.0 on, updates are automatic
+  (v1.2.0 → v1.2.1 → …) with no manual step.
+
 ## [1.1.6] - 2026-09-30
 
 ### Fixed

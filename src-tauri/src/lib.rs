@@ -120,7 +120,7 @@ fn push_window_state(app: &AppHandle) {
         let maximized = win.is_maximized().unwrap_or(false);
         let focused = win.is_focused().unwrap_or(false);
         let _ = win.emit(
-            "oneboost:window-state",
+            "oneboost://window-state",
             serde_json::json!({ "maximized": maximized, "focused": focused }),
         );
     }
@@ -129,7 +129,7 @@ fn push_window_state(app: &AppHandle) {
 pub fn show_main(app: &AppHandle, page: Option<&str>) {
     if let Some(win) = app.get_webview_window("main") {
         if let Some(p) = page {
-            let _ = win.emit("oneboost:page-changed", p);
+            let _ = win.emit("oneboost://page-changed", p);
         }
         if win.is_minimized().unwrap_or(false) {
             let _ = win.unminimize();
@@ -192,7 +192,7 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
                 }
                 let next = st.tracker.prefs().pause_tracking;
                 update_tray_state(app, next);
-                let _ = app.emit("oneboost:prefs-changed", st.tracker.prefs());
+                let _ = app.emit("oneboost://prefs-changed", st.tracker.prefs());
             }
             "settings" => show_main(app, Some("settings")),
             "exit" => {
@@ -364,7 +364,7 @@ fn set_pref(app: AppHandle, key: String, value: serde_json::Value) -> Result<Pre
             recreate_window(&handle);
         });
     }
-    let _ = app.emit("oneboost:prefs-changed", prefs.clone());
+    let _ = app.emit("oneboost://prefs-changed", prefs.clone());
     Ok(prefs)
 }
 
@@ -389,14 +389,14 @@ fn apply_pref_value(
         "accent" => {
             let s = value.as_str().ok_or("accent must be a string")?;
             prefs.accent = match s {
-                "violet" => Accent::violet,
-                "teal" => Accent::teal,
-                "green" => Accent::green,
-                "amber" => Accent::amber,
-                "rose" => Accent::rose,
-                "sky" => Accent::sky,
-                "crimson" => Accent::crimson,
-                "blue" => Accent::blue,
+                "violet" => Accent::Violet,
+                "teal" => Accent::Teal,
+                "green" => Accent::Green,
+                "amber" => Accent::Amber,
+                "rose" => Accent::Rose,
+                "sky" => Accent::Sky,
+                "crimson" => Accent::Crimson,
+                "blue" => Accent::Blue,
                 other => return Err(format!("unknown accent: {other}")),
             };
         }
@@ -632,7 +632,7 @@ fn run_loop(app: AppHandle) {
             last_monitor = std::time::Instant::now();
             if let Some(sample) = monitor::sample_once() {
                 st.monitor.set_last(sample.clone());
-                let _ = app.emit("oneboost:monitor", &sample);
+                let _ = app.emit("oneboost://monitor", &sample);
             }
         }
         if last_push.elapsed().as_millis() as u64 >= 500 {
@@ -641,11 +641,11 @@ fn run_loop(app: AppHandle) {
                 let now = now_ms();
                 if now.saturating_sub(last_snapshot_push) >= 1_000 {
                     last_snapshot_push = now;
-                    let _ = win.emit("oneboost:snapshot", st.tracker.snapshot());
+                    let _ = win.emit("oneboost://snapshot", st.tracker.snapshot());
                 }
                 if now.saturating_sub(last_dashboard_push) >= 2_000 {
                     last_dashboard_push = now;
-                    let _ = win.emit("oneboost:usage-updated", st.tracker.dashboard());
+                    let _ = win.emit("oneboost://usage-updated", st.tracker.dashboard());
                 }
             }
         }
@@ -654,12 +654,6 @@ fn run_loop(app: AppHandle) {
             st.tracker.flush_saves();
         }
     }
-}
-
-#[tauri::command]
-fn suspend_tracker(app: AppHandle, kind: String) {
-    // Reserved for OS power hooks; the native pump already covers Windows.
-    let _ = (app, kind);
 }
 
 pub fn run() {

@@ -175,14 +175,14 @@ pub fn sanitize_prefs(p: serde_json::Value) -> Prefs {
             }
             if let Some(a) = p.get("accent").and_then(|a| a.as_str()) {
                 out.accent = match a {
-                    "violet" => Accent::violet,
-                    "teal" => Accent::teal,
-                    "green" => Accent::green,
-                    "amber" => Accent::amber,
-                    "rose" => Accent::rose,
-                    "sky" => Accent::sky,
-                    "crimson" => Accent::crimson,
-                    _ => Accent::blue,
+                    "violet" => Accent::Violet,
+                    "teal" => Accent::Teal,
+                    "green" => Accent::Green,
+                    "amber" => Accent::Amber,
+                    "rose" => Accent::Rose,
+                    "sky" => Accent::Sky,
+                    "crimson" => Accent::Crimson,
+                    _ => Accent::Blue,
                 };
             }
             if let Some(t) = p.get("transparency").and_then(|t| t.as_f64()) {

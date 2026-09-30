@@ -404,6 +404,9 @@ impl SharedTracker {
     }
 
     pub fn save_now(&self) {
+        // Lock order is ALWAYS storage → tracker (see sample_once) to make
+        // every two-lock path deadlock-free.
+        let mut storage = self.storage.lock().unwrap();
         let mut t = self.tracker.lock().unwrap();
         if !t.dirty {
             t.dirty_since = None;
@@ -413,7 +416,6 @@ impl SharedTracker {
         t.dirty = false;
         t.dirty_since = None;
         t.dirty_deadline = None;
-        let mut storage = self.storage.lock().unwrap();
         if let Err(e) = storage.save_data() {
             t.last_error = Some(format!("Failed to write usage data: {e}"));
             t.dirty = true;
@@ -423,11 +425,11 @@ impl SharedTracker {
 
     /// Synchronous save for suspend/shutdown/lock flushes.
     pub fn critical_save(&self) {
+        let mut storage = self.storage.lock().unwrap();
         let mut t = self.tracker.lock().unwrap();
         t.dirty = false;
         t.dirty_since = None;
         t.dirty_deadline = None;
-        let mut storage = self.storage.lock().unwrap();
         if let Err(e) = storage.save_data_sync() {
             t.last_error = Some(format!("Failed to write usage data: {e}"));
             t.dirty = true;
@@ -446,6 +448,8 @@ impl SharedTracker {
         }
         self.critical_save();
     }
+
+    /// Runs after stop(); safe no-op when already stopped.
 
     pub fn stop(&self) {
         {

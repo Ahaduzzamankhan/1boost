@@ -152,32 +152,23 @@ fn adler32(data: &[u8]) -> u32 {
 }
 
 fn crc32(buf: &[u8]) -> u32 {
-    static mut TABLE: Option<[u32; 256]> = None;
-    unsafe {
-        let table = {
-            let t = &*std::ptr::addr_of!(TABLE);
-            if let Some(t) = t.as_ref() {
-                t
-            } else {
-                let mut t = [0u32; 256];
-                for (n, e) in t.iter_mut().enumerate() {
-                    let mut c = n as u32;
-                    for _ in 0..8 {
-                        c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
-                    }
-                    *e = c;
-                }
-                TABLE = Some(t);
-                &*std::ptr::addr_of!(TABLE)
+    static TABLE: std::sync::OnceLock<[u32; 256]> = std::sync::OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        let mut t = [0u32; 256];
+        for (n, e) in t.iter_mut().enumerate() {
+            let mut c = n as u32;
+            for _ in 0..8 {
+                c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
             }
-            .unwrap()
-        };
-        let mut crc: u32 = !0;
-        for &byte in buf {
-            crc = (crc >> 8) ^ table[((crc ^ byte as u32) & 0xff) as usize];
+            *e = c;
         }
-        !crc
+        t
+    });
+    let mut crc: u32 = !0;
+    for &byte in buf {
+        crc = (crc >> 8) ^ table[((crc ^ byte as u32) & 0xff) as usize];
     }
+    !crc
 }
 
 fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {

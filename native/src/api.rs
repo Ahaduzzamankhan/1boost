@@ -8,14 +8,6 @@
 use crate::monitor::BoostMonitorResult;
 use crate::{
     BoostIdleResult, BoostPumpResult, BoostSampleResult, EV_SLEEP, EV_SHUTDOWN,
-};
-use std::time::{SystemTime, UNIX_EPOCH};
-
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 /// One tracking sample (foreground app, input idle, power state).
@@ -233,18 +225,18 @@ impl From<&BoostMonitorResult> for MonitorSample {
 
 /// Start the native event-pump thread. Idempotent.
 pub fn start() -> bool {
-    unsafe { crate::oneboost_start() == 1 }
+    crate::oneboost_start() == 1
 }
 
 /// Stop the pump thread and release monitoring resources. Idempotent.
 pub fn shutdown() {
-    unsafe { crate::oneboost_shutdown() }
+    crate::oneboost_shutdown()
 }
 
 /// Collect one tracking sample.
 pub fn collect_once(idle_threshold_ms: u32) -> Option<Sample> {
     let mut raw = BoostSampleResult::zeroed();
-    let rc = unsafe { crate::oneboost_collect_once(&mut raw, idle_threshold_ms) };
+    let rc = crate::oneboost_collect_once(&mut raw, idle_threshold_ms);
     if rc == 1 {
         Some(Sample::from_raw(&raw))
     } else {
@@ -257,7 +249,7 @@ pub fn pump_events() -> Vec<NativeEvent> {
     const MAX: usize = 64;
     let mut out = BoostPumpResult::zeroed();
     let mut buf = vec![crate::BoostEventData::zeroed(); MAX];
-    let n = unsafe { crate::oneboost_pump_events(&mut out, buf.as_mut_ptr(), MAX as u32) };
+    let n = crate::oneboost_pump_events(&mut out, buf.as_mut_ptr(), MAX as u32);
     if n <= 0 {
         return Vec::new();
     }
@@ -270,7 +262,7 @@ pub fn pump_events() -> Vec<NativeEvent> {
                 2 => "resume".to_string(),
                 3 => "lock".to_string(),
                 4 => "unlock".to_string(),
-                5 => if e.value >= 0 { "monitor-on" } else { "monitor-off" }.to_string(),
+                5 => if e.value > 0 { "monitor-on" } else { "monitor-off" }.to_string(),
                 6 => "power-source".to_string(),
                 7 => "battery".to_string(),
                 8 => "session".to_string(),
@@ -286,7 +278,7 @@ pub fn pump_events() -> Vec<NativeEvent> {
 /// Idle probe (ms since last input), when available.
 pub fn idle_state() -> Option<u32> {
     let mut out = BoostIdleResult::zeroed();
-    if unsafe { crate::oneboost_get_idle_state(&mut out) } == 1 && out.ok == 1 {
+    if crate::oneboost_get_idle_state(&mut out) == 1 && out.ok == 1 {
         Some(out.idle_ms)
     } else {
         None
@@ -296,7 +288,7 @@ pub fn idle_state() -> Option<u32> {
 /// One system-monitoring snapshot (rate metrics need a steady ≥2 s cadence).
 pub fn monitor_sample() -> Option<MonitorSample> {
     let mut raw = BoostMonitorResult::zeroed();
-    let rc = unsafe { crate::oneboost_monitor_sample(&mut raw) };
+    let rc = crate::monitor::oneboost_monitor_sample(&mut raw);
     if rc == 1 {
         Some(MonitorSample::from(&raw))
     } else {
@@ -306,5 +298,5 @@ pub fn monitor_sample() -> Option<MonitorSample> {
 
 /// Release the shared PDH query. Safe to call multiple times.
 pub fn monitor_shutdown() {
-    crate::monitor::oneboost_monitor_shutdown();
+    crate::monitor::oneboost_monitor_shutdown()
 }

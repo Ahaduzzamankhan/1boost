@@ -51,8 +51,13 @@ fn state_payload(
     }
 }
 
+fn running_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
+#[allow(dead_code)]
 fn running_prerelease() -> bool {
-    let v = env!("CARGO_PKG_VERSION");
+    let v = running_version();
     v.contains("-alpha") || v.contains("-beta")
 }
 
@@ -134,6 +139,7 @@ async fn do_check(app: &AppHandle) -> UpdateStatePayload {
 
 static PENDING: Mutex<Option<String>> = Mutex::new(None);
 
+#[allow(dead_code)]
 fn store_pending(_app: &AppHandle, version: String) {
     if let Ok(mut g) = PENDING.lock() {
         *g = Some(version);
@@ -143,6 +149,19 @@ fn store_pending(_app: &AppHandle, version: String) {
 pub async fn update_state(app: &AppHandle) -> UpdateStatePayload {
     // Non-mutating snapshot: the UI polls this on load.
     state_payload("idle", None, None, None, None, None)
+}
+
+/// True when a release manifest version is newer than the running build.
+#[allow(dead_code)]
+fn is_newer(candidate: &str, current: &str) -> bool {
+    let parse = |v: &str| -> (u64, u64, u64) {
+        let core = v.split('-').next().unwrap_or("");
+        let mut it = core.split('.').map(|p| p.parse::<u64>().unwrap_or(0));
+        (it.next().unwrap_or(0), it.next().unwrap_or(0), it.next().unwrap_or(0))
+    };
+    let (a1, a2, a3) = parse(candidate);
+    let (b1, b2, b3) = parse(current);
+    (a1, a2, a3) > (b1, b2, b3)
 }
 
 pub async fn check_updates(app: &AppHandle) -> UpdateStatePayload {

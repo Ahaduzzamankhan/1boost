@@ -29,19 +29,27 @@ impl Default for Theme {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Accent {
-    blue,
-    violet,
-    teal,
-    green,
-    amber,
-    rose,
-    sky,
-    crimson,
+    #[serde(rename = "blue")]
+    Blue,
+    #[serde(rename = "violet")]
+    Violet,
+    #[serde(rename = "teal")]
+    Teal,
+    #[serde(rename = "green")]
+    Green,
+    #[serde(rename = "amber")]
+    Amber,
+    #[serde(rename = "rose")]
+    Rose,
+    #[serde(rename = "sky")]
+    Sky,
+    #[serde(rename = "crimson")]
+    Crimson,
 }
 
 impl Default for Accent {
     fn default() -> Self {
-        Accent::blue
+        Accent::Blue
     }
 }
 
@@ -64,7 +72,7 @@ impl Default for Prefs {
     fn default() -> Self {
         Prefs {
             theme: Theme::DarkGlass,
-            accent: Accent::blue,
+            accent: Accent::Blue,
             transparency: 0.4,
             reduced_motion: false,
             launch_at_login: false,
@@ -76,7 +84,6 @@ impl Default for Prefs {
         }
     }
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DayData {
