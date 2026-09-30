@@ -91,7 +91,7 @@ mod win {
                 if ptr.is_null() {
                     return false;
                 }
-                std::ptr::copy_nonoverlapping(utf16.as_ptr() as *const u8, ptr, bytes);
+                unsafe { std::ptr::copy_nonoverlapping(utf16.as_ptr() as *const u8, ptr, bytes) };
                 unsafe { GlobalUnlock(h) };
                 unsafe { SetClipboardData(CF_UNICODETEXT, h as isize) != 0 }
             })();
