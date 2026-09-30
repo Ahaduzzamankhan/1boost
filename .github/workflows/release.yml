@@ -247,7 +247,6 @@ jobs:
           set -uo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
           TAG="${GITHUB_REF_NAME}"
-          ASSETS=$(gh release view "$TAG" --json assets --jq '.assets[].name')
 
           # This release is still a draft at this point, so the newest
           # published stable release is the one installs are actually sitting on.

@@ -26,7 +26,7 @@ use serde::Serialize;
 use std::io::Read;
 use std::io::Write;
 use std::sync::Mutex;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 use tauri_plugin_updater::UpdaterExt;
 
 const REPO_OWNER: &str = "Ahaduzzamankhan";
@@ -120,6 +120,18 @@ async fn do_check(app: &AppHandle) -> UpdateStatePayload {
             // Every failure below is non-fatal: the full path below is always
             // able to produce the same bytes, just more slowly.
             if let Some(base) = payload::load(app, running_version()) {
+                emit_state(
+                    app,
+                    &state_payload(
+                        "downloading",
+                        Some(version.clone()),
+                        Some(0.0),
+                        Some(0),
+                        None,
+                        None,
+                        Some(Mode::Delta),
+                    ),
+                );
                 let attempted = payload::fetch_delta(
                     &update.download_url.to_string(),
                     running_version(),
@@ -309,15 +321,10 @@ pub async fn rollback_update(app: AppHandle) -> Result<Option<String>, String> {
         format!("the cached payload for {version} is not a usable installer archive")
     })?;
 
-    // Stage the installer next to the cached payloads so a stale copy cannot be
-    // mistaken for a fresh one, then hand it to Windows and step aside.
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("payloads");
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let staged = dir.join(format!("rollback-{version}.exe"));
+    // Stage the installer in the temp directory rather than next to the payload
+    // cache: a rollback is rare, and a multi-megabyte executable left behind in
+    // the app's data folder every time would never be cleaned up.
+    let staged = std::env::temp_dir().join(format!("1boost-rollback-{version}.exe"));
     let mut file = std::fs::File::create(&staged).map_err(|e| e.to_string())?;
     file.write_all(&installer).map_err(|e| e.to_string())?;
     drop(file);

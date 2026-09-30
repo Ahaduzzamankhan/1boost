@@ -10,6 +10,7 @@ import {
   OP_COPY,
   applyDelta,
   buildDelta,
+  rollingWindowIsConsistent,
 } from '../scripts/gen-delta.mjs'
 
 /**
@@ -45,6 +46,13 @@ function fakeArtifact(seed: number, size: number, mutate?: (buf: Buffer) => void
 }
 
 describe('delta format', () => {
+  it('rolls the window hash consistently with a fresh hash', () => {
+    // If the modular inverse used by the rolling hash were wrong, matches
+    // would only ever be found at the first window and every patch would
+    // degenerate into 64-byte copies.
+    expect(rollingWindowIsConsistent()).toBe(true)
+  })
+
   it('writes the documented header', () => {
     const base = Buffer.alloc(256, 1)
     const target = Buffer.alloc(300, 2)
@@ -107,6 +115,15 @@ describe('delta format', () => {
     const target = Buffer.from('tiny target, slightly longer')
     const { patch } = buildDelta(base, target)
     expect(applyDelta(base, patch)).toEqual(target)
+  })
+
+  it('refuses a patch whose instructions under-fill the declared length', () => {
+    const base = noise(16, 4096)
+    const target = Buffer.from(base)
+    const { patch } = buildDelta(base, target)
+    // Claim more output than the instructions can produce.
+    patch.writeBigUInt64LE(BigInt(target.length + 8), 80)
+    expect(() => applyDelta(base, patch)).toThrow(/fill the declared length/)
   })
 
   it('refuses trailing bytes in a hand-edited patch', () => {

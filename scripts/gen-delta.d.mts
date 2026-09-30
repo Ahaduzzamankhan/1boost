@@ -12,6 +12,7 @@ export type DeltaOp =
   | { kind: typeof OP_ADD; data: Buffer }
 
 export function sha256(bytes: Buffer): Buffer
+export function rollingWindowIsConsistent(): boolean
 export function buildOps(base: Buffer, target: Buffer): DeltaOp[]
 export function applyDelta(base: Buffer, patch: Buffer): Buffer
 export function buildDelta(

@@ -48,21 +48,41 @@ const MAX_CANDIDATES = 8
 const POLY = 0x01000193 // FNV prime; odd, so it is invertible mod 2^32.
 const UINT32 = 0x100000000
 
-/** POLY^(WINDOW-1) mod 2^32. */
+/** POLY^(WINDOW-1) mod 2^32, the weight of the byte leaving the window. */
 const POW_HIGH = (() => {
   let p = 1
   for (let i = 0; i < WINDOW - 1; i += 1) p = Math.imul(p, POLY) >>> 0
   return p
 })()
 
-/** Multiplicative inverse of an odd number mod 2^32 (Newton iteration). */
-function inverse32(a) {
-  let x = a >>> 0
-  for (let i = 0; i < 5; i += 1) x = Math.imul(x, (2 - Math.imul(a, x)) | 0) >>> 0
-  return x >>> 0
+/**
+ * A wrong roll does not corrupt the patch — every match is confirmed with a
+ * full byte compare — but it silently breaks the rolling window, turning the
+ * scan into a search that stops finding matches after the first byte. Worth
+ * asserting rather than discovering in a download size.
+ */
+export function rollingWindowIsConsistent() {
+  const sample = noise(0x1b04d, 512)
+  for (let start = 0; start + WINDOW + 1 < sample.length; start += 1) {
+    if (roll(hashAt(sample, start), sample[start], sample[start + WINDOW]) !== hashAt(sample, start + 1)) {
+      return false
+    }
+  }
+  return true
 }
 
-const POLY_INV = inverse32(POLY)
+/** Deterministic noise, used by the tests. */
+function noise(seed, length) {
+  const buf = Buffer.alloc(length)
+  let x = seed | 0 || 0x9e3779b9
+  for (let i = 0; i < length; i += 1) {
+    x ^= x << 13
+    x ^= x >>> 17
+    x ^= x << 5
+    buf[i] = x & 0xff
+  }
+  return buf
+}
 
 export function sha256(bytes) {
   return createHash('sha256').update(bytes).digest()
@@ -75,10 +95,14 @@ function hashAt(buf, at) {
   return h
 }
 
-/** One-byte window roll: drop `out`, append `in`. */
+/**
+ * One-byte window roll: subtract the byte leaving the window at its
+ * POLY^(WINDOW-1) weight, shift the remaining weights up by one factor of
+ * POLY, then add the byte entering at weight 1.
+ */
 function roll(h, out, inByte) {
   const stripped = (h - Math.imul(out, POW_HIGH)) | 0
-  return (Math.imul(stripped, POLY_INV) + inByte) >>> 0
+  return (Math.imul(stripped, POLY) + inByte) >>> 0
 }
 
 function buildIndex(base) {
@@ -109,8 +133,13 @@ export function buildOps(base, target) {
     literalFrom = to
   }
 
-  while (pos + WINDOW <= target.length) {
-    const candidates = index.get(hashAt(target, pos))
+  const windowEnd = (at) => at + WINDOW <= target.length
+  // The window hash is rolled forward one byte at a time instead of being
+  // recomputed, which is what keeps a multi-megabyte payload to a linear scan.
+  let hash = windowEnd(0) ? hashAt(target, 0) : 0
+
+  while (windowEnd(pos)) {
+    const candidates = index.get(hash)
     let matched = -1
     if (candidates !== undefined) {
       for (const c of candidates) {
@@ -121,6 +150,7 @@ export function buildOps(base, target) {
       }
     }
     if (matched === -1) {
+      hash = roll(hash, target[pos], target[pos + WINDOW])
       pos += 1
       continue
     }
@@ -128,9 +158,9 @@ export function buildOps(base, target) {
     // becomes a single COPY instead of a chain of 64-byte ones.
     let len = WINDOW
     while (
+      matched + len < base.length &&
       pos + len < target.length &&
-      base[matched + len] === target[pos + len] &&
-      matched + len < base.length
+      base[matched + len] === target[pos + len]
     ) {
       len += 1
     }
@@ -138,6 +168,8 @@ export function buildOps(base, target) {
     ops.push({ kind: OP_COPY, offset: matched, length: len })
     pos += len
     literalFrom = pos
+    // A match jumped the scan, so the rolling hash has to be reseeded.
+    hash = windowEnd(pos) ? hashAt(target, pos) : 0
   }
   flushLiteral(target.length)
   return ops
@@ -196,6 +228,9 @@ export function applyDelta(base, patch) {
     }
   }
   if (at !== patch.length) throw new Error('trailing bytes')
+  // allocUnsafe leaves the tail undefined if the instructions under-fill the
+  // declared length, so refuse the patch rather than hand back garbage.
+  if (cursor !== targetLen) throw new Error('instructions do not fill the declared length')
   return out
 }
 

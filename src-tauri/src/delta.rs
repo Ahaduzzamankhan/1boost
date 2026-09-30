@@ -448,13 +448,40 @@ mod tests {
 
     #[test]
     fn rejects_a_patch_whose_own_bytes_were_tampered_with() {
-        // Flipping a literal byte keeps the patch structurally valid but the
-        // rebuilt artifact no longer hashes to target_sha256.
-        let mut patch = PATCH.to_vec();
-        let last = patch.len() - 1;
-        patch[last] ^= 0xff;
-        let delta = parse(&patch).expect("structure is still valid");
-        assert_eq!(apply(&delta, BASE), Err(DeltaError::TargetMismatch));
+        // Flipping any byte of the patch has to make it unusable. Whether that
+        // is caught by the structural checks or only by the target hash
+        // depends on which field the byte lands in, and both are rejections.
+        for index in [HEADER_SIZE + 1, PATCH.len() - 1] {
+            let mut patch = PATCH.to_vec();
+            patch[index] ^= 0xff;
+            assert!(
+                rebuild(&patch, BASE).is_err(),
+                "a patch with byte {index} flipped was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_a_literal_byte_that_was_changed_in_flight() {
+        // The interesting case for a downloaded patch: it still parses, every
+        // length is in range, and only the target hash exposes the change.
+        let base = b"hello world".to_vec();
+        let target = b"hello there".to_vec();
+        let mut patch = hand_made(
+            &[
+                Spec::Copy {
+                    offset: 0,
+                    length: 5,
+                },
+                Spec::Add(b" there".to_vec()),
+            ],
+            &base,
+            &target,
+        );
+        // header, then op1 (tag + offset + length), then op2 (tag + length).
+        let data_at = HEADER_SIZE + 1 + 8 + 4 + 1 + 4;
+        patch[data_at] ^= 0xff;
+        assert_eq!(rebuild(&patch, &base), Err(DeltaError::TargetMismatch));
     }
 
     #[test]
@@ -484,13 +511,15 @@ mod tests {
     fn copies_and_literals_round_trip() {
         let base = b"the quick brown fox jumps over the lazy dog".to_vec();
         let target = b"the quick brown cat jumps over the lazy dog!".to_vec();
-        let offset = offset_of(&base, b"jumps over the lazy dog");
+        // "fox" became "cat", everything after it is shared.
+        let shared = b"jumps over the lazy dog";
+        let offset = offset_of(&base, shared);
         let patch = hand_made(
             &[
-                Spec::Add(b"the quick brown ".to_vec()),
+                Spec::Add(b"the quick brown cat ".to_vec()),
                 Spec::Copy {
                     offset,
-                    length: 25,
+                    length: shared.len() as u32,
                 },
                 Spec::Add(b"!".to_vec()),
             ],
