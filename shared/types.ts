@@ -355,6 +355,11 @@ export interface Bridge {
   tagIndex: () => Promise<Record<string, number>>
   searchEverything: (query: string) => Promise<SearchHit[]>
   quickCapture: (input: string) => Promise<CaptureResult>
+  // File tools ----------------------------------------------------------
+  fileRoots: () => Promise<RootFolder[]>
+  filesRecent: (force?: boolean) => Promise<FileEntry[]>
+  filesSearch: (query: string, force?: boolean) => Promise<FileEntry[]>
+  openFile: (path: string, reveal?: boolean) => Promise<void>
 }
 
 // ---- Productivity vault (notes / tasks / clipboard) ------------------------
@@ -387,6 +392,21 @@ export interface Clip {
   text: string
   pinned: boolean
   createdMs: number
+}
+
+export interface FileEntry {
+  name: string
+  path: string
+  modifiedMs: number
+  size: number
+  folder: string
+  ext: string
+}
+
+export interface RootFolder {
+  label: string
+  path: string
+  exists: boolean
 }
 
 export interface SearchHit {

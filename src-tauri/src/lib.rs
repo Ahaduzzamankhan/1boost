@@ -9,6 +9,7 @@
 mod aggregator;
 mod apps;
 mod clipboard;
+mod files;
 mod icons;
 mod model;
 mod monitor;
@@ -34,6 +35,7 @@ pub struct AppState {
     pub tracker: Arc<SharedTracker>,
     pub monitor: monitor::Monitor,
     pub vault: Arc<vault::Vault>,
+    pub files: files::FileIndex,
     pub tray_handle: Mutex<Option<tauri::tray::TrayIcon>>,
     /// Handle of the tray "toggle" item, so its label can be updated without
     /// rebuilding the menu (TrayIcon has no menu accessor in Tauri 2).
@@ -578,6 +580,48 @@ fn notify_theme_class(app: AppHandle, _glass: bool) {
     apply_theme(&app);
 }
 
+// File tools ----------------------------------------------------------------
+
+#[tauri::command]
+fn file_roots(app: AppHandle) -> Vec<files::RootFolder> {
+    let _ = &app;
+    files::roots()
+}
+
+#[tauri::command]
+fn files_recent(app: AppHandle, force: bool) -> Vec<files::FileEntry> {
+    app.state::<AppState>().files.recent(force)
+}
+
+#[tauri::command]
+fn files_search(app: AppHandle, query: String, force: bool) -> Vec<files::FileEntry> {
+    app.state::<AppState>().files.search(&query, force)
+}
+
+/// Open a file with its default Windows handler, or reveal it in Explorer.
+#[tauri::command]
+fn open_file(app: AppHandle, path: String, reveal: bool) -> Result<(), String> {
+    if !files::is_openable(&path) {
+        return Err("That file cannot be opened.".into());
+    }
+    let target = if reveal {
+        format!("/select,\"{}\"", path)
+    } else {
+        path.clone()
+    };
+    // Explorer handles both "open this" and "show me this".
+    if reveal {
+        std::process::Command::new("explorer.exe")
+            .arg(&target)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    app.opener()
+        .open_path(path, None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
 // Productivity vault ---------------------------------------------------------
 
 #[tauri::command]
@@ -867,6 +911,10 @@ pub fn run() {
             get_apps_list,
             clear_data,
             open_data_folder,
+            file_roots,
+            files_recent,
+            files_search,
+            open_file,
             export_json,
             monitor_subscribe,
             monitor_unsubscribe,
@@ -905,6 +953,7 @@ pub fn run() {
                 tracker: tracker.clone(),
                 monitor: monitor::Monitor::new(),
                 vault: vault.clone(),
+                files: files::FileIndex::new(),
                 tray_handle: Mutex::new(None),
                 tray_toggle: Mutex::new(None),
                 quitting: AtomicBool::new(false),

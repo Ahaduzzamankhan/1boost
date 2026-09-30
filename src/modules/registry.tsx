@@ -42,6 +42,7 @@ const ClipboardPage = lazy(() => import('../pages/ClipboardPage'))
 const CalendarPage = lazy(() => import('../pages/CalendarPage'))
 const UtilitiesPage = lazy(() => import('../pages/UtilitiesPage'))
 const DevToolsPage = lazy(() => import('../pages/DevToolsPage'))
+const FilesPage = lazy(() => import('../pages/FilesPage'))
 
 /** Workspace groups, so the sidebar stays scannable as modules grow. */
 export type WorkspaceId = 'insight' | 'capture' | 'utilities' | 'system'
@@ -171,9 +172,7 @@ export const MODULES: ModuleDef[] = [
     keywords: ['files', 'file', 'open', 'recent', 'documents'],
     workspace: 'utilities',
     icon: <Files size={18} />,
-    // File tools reuse the applications view for now; the shell renders the
-    // tool surface inside the same route.
-    component: AppsPage,
+    component: FilesPage,
   },
   {
     id: 'settings',

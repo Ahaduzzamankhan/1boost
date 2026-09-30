@@ -1162,3 +1162,57 @@
   text-decoration: line-through;
   color: var(--text-muted);
 }
+/* ------------------------------------------------------------------- files */
+
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.file-row:last-child {
+  border-bottom: none;
+}
+
+.file-row:hover {
+  background: var(--surface-hover);
+}
+
+.file-main {
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.file-name {
+  font-size: 13.5px;
+  font-weight: 550;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-ext {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.file-meta {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.file-actions {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity var(--transition-fast) var(--ease);
+}
+
+.file-row:hover .file-actions {
+  opacity: 1;
+}

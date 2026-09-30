@@ -4,6 +4,40 @@ All notable changes to 1Boost are documented here. The latest release's
 section is injected into the GitHub Release body by CI
 (`scripts/release-notes.mjs`).
 
+## [1.3.0] - 2026-09-30
+
+### Added
+
+- **Workspaces** — modules are grouped into Insight, Capture and Utilities, and
+  the sidebar switches between them. Every module is code-split, so opening
+  1Boost loads the shell plus one screen instead of the whole app.
+- **Command palette** (<kbd>Ctrl</kbd>+<kbd>K</kbd>) — one box that searches
+  modules, notes, tasks and every app you have used, ranked locally for
+  modules and by a Rust fuzzy scorer for content.
+- **Quick capture** (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Space</kbd>) —
+  type anywhere and press Enter. Plain text becomes a note, a leading `!` makes
+  it a task, and `#word` becomes a tag.
+- **Notes** — list, search, pin, tag and edit; autosorted by pin then edit time.
+- **Tasks** — quick add, filters, priorities, due dates and one-click clear.
+  A task with a due date shows up on the calendar.
+- **Clipboard history** — records new clipboard text continuously (pinned
+  entries are never evicted), searchable, with copy and delete.
+- **Calendar** — month grid plus agenda, fed by task due dates.
+- **Utilities** — unit converter, colour converter, password generator and an
+  epoch/time converter.
+- **Dev tools** — JSON format/minify, base64 encode/decode, SHA-1/SHA-256 and
+  UUID generation, all computed locally.
+- **Files** — searches and opens files from Desktop, Documents, Downloads,
+  Pictures, Music and Videos, with show-in-Explorer.
+
+### Changed
+
+- The renderer build is now ESM with code splitting: startup ships ~280 KB and
+  the remaining modules stream in only when opened.
+- Productivity data lives in its own files (`notes.json`, `tasks.json`,
+  `clipboard.json`) next to the existing ones, so `usage-data.json` and every
+  old backup stay exactly as they were.
+
 ## [1.2.1] - 2026-09-30
 
 ### Fixed

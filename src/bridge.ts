@@ -3,7 +3,7 @@ import type { Bridge, PageId, Prefs } from '../shared/types'
 /**
  * Browser-harness only: matches package.json so About/Updates never lie.
  */
-const HARNESS_VERSION = '1.2.1'
+const HARNESS_VERSION = '1.3.0'
 
 declare global {
   interface Window {
@@ -241,6 +241,10 @@ function createBrowserHarnessBridge(): Bridge {
     tagIndex: async () => ({}),
     searchEverything: async () => [],
     quickCapture: async (input) => ({ kind: 'note', title: input, id: '' }),
+    fileRoots: async () => [],
+    filesRecent: async () => [],
+    filesSearch: async () => [],
+    openFile: async () => undefined,
   }
 }
 
@@ -345,6 +349,12 @@ function createTauriBridge(): Bridge {
       invoke('search_everything', { query }) as Promise<Awaited<ReturnType<Bridge['searchEverything']>>>,
     quickCapture: (input) =>
       invoke('quick_capture', { input }) as Promise<Awaited<ReturnType<Bridge['quickCapture']>>>,
+    fileRoots: () => invoke('file_roots') as Promise<Awaited<ReturnType<Bridge['fileRoots']>>>,
+    filesRecent: (force = false) =>
+      invoke('files_recent', { force }) as Promise<Awaited<ReturnType<Bridge['filesRecent']>>>,
+    filesSearch: (query, force = false) =>
+      invoke('files_search', { query, force }) as Promise<Awaited<ReturnType<Bridge['filesSearch']>>>,
+    openFile: (path, reveal = false) => invoke('open_file', { path, reveal }) as Promise<void>,
   }
 }
 
