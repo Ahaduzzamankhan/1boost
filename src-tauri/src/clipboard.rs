@@ -48,23 +48,20 @@ mod win {
         if size < 2 {
             return None;
         }
-        let ptr = GlobalLock(h);
+        // GlobalLock returns a c_void pointer; the clipboard format we asked
+        // for is always a NUL-terminated UTF-16 string.
+        let ptr = GlobalLock(h) as *const u16;
         if ptr.is_null() {
             return None;
         }
-        // The buffer is a NUL-terminated UTF-16 string; walk it instead of
-        // trusting GlobalSize so a non-terminated buffer cannot overrun.
-        let mut len = 0usize;
+        // Walk to the terminator instead of trusting GlobalSize, so a buffer
+        // without one can never read past its allocation.
         let words = (size / 2) as usize;
-        loop {
-            let ch = *ptr.add(len);
-            if ch == 0 || len >= words {
-                break;
-            }
+        let mut len = 0usize;
+        while len < words && *ptr.add(len) != 0 {
             len += 1;
         }
-        let slice = std::slice::from_raw_parts(ptr, len);
-        let text = String::from_utf16_lossy(slice);
+        let text = String::from_utf16_lossy(std::slice::from_raw_parts(ptr, len));
         GlobalUnlock(h);
         Some(text)
     }
@@ -90,15 +87,13 @@ mod win {
                 if h.is_null() {
                     return false;
                 }
-                let ptr = unsafe { GlobalLock(h) };
+                let ptr = unsafe { GlobalLock(h) } as *mut u8;
                 if ptr.is_null() {
                     return false;
                 }
-                std::ptr::copy_nonoverlapping(utf16.as_ptr() as *const u8, ptr as *mut u8, bytes);
-                unsafe {
-                    GlobalUnlock(h);
-                    SetClipboardData(CF_UNICODETEXT, h as isize)
-                } != 0
+                std::ptr::copy_nonoverlapping(utf16.as_ptr() as *const u8, ptr, bytes);
+                unsafe { GlobalUnlock(h) };
+                unsafe { SetClipboardData(CF_UNICODETEXT, h as isize) != 0 }
             })();
             unsafe {
                 CloseClipboard();

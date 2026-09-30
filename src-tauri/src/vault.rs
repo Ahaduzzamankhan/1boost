@@ -566,7 +566,7 @@ fn preview(body: &str) -> String {
 /// Tags in use, with counts — powers the tag filter chips.
 pub fn tag_index(notes: &[Note], tasks: &[Task]) -> BTreeMap<String, usize> {
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
-    for t in notes.iter().filter_map(|n| n.tags.iter()).chain(tasks.iter().filter_map(|t| t.tags.iter())) {
+    for t in notes.iter().flat_map(|n| n.tags.iter()).chain(tasks.iter().flat_map(|t| t.tags.iter())) {
         *counts.entry(t.clone()).or_insert(0) += 1;
     }
     counts
