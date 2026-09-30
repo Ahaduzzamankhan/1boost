@@ -167,7 +167,10 @@ pub fn parse(patch: &[u8]) -> Result<Delta, DeltaError> {
                     .ok_or(DeltaError::Malformed("output length overflows"))?;
                 Op::Add { data }
             }
-            other => return Err(DeltaError::Malformed("unknown instruction tag")),
+            other => {
+                let _ = other;
+                return Err(DeltaError::Malformed("unknown instruction tag"));
+            }
         };
         // Bail as soon as the instructions overshoot the declared size rather
         // than after allocating for them.

@@ -111,10 +111,8 @@ fn prune(dir: &Path) {
     // Newest first, so the oldest artifacts are the ones dropped.
     cached.sort_by(|a, b| b.0.cmp(&a.0));
     for (_, path) in cached.into_iter().skip(MAX_CACHE_ENTRIES) {
-        let _ = fs::remove_file(path);
-        if let Some(hash) = path.with_extension("payload.sha256") {
-            let _ = fs::remove_file(hash);
-        }
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(path.with_extension("payload.sha256"));
     }
 }
 

@@ -21,7 +21,6 @@
 //! (scripts/gen-latest-json.mjs) pointing at the NSIS `*.exe` artifact, with a
 //! minisign signature produced at build time (TAURI_SIGNING_PRIVATE_KEY).
 
-use crate::delta;
 use crate::payload;
 use serde::Serialize;
 use std::io::Read;
@@ -114,7 +113,7 @@ async fn do_check(app: &AppHandle) -> UpdateStatePayload {
     };
     emit_state(app, &state_payload("checking", None, None, None, None, None, None));
     match updater.check().await {
-        Ok(Some(mut update)) => {
+        Ok(Some(update)) => {
             let version = update.version.clone();
 
             // --- Delta first -------------------------------------------------
@@ -273,7 +272,7 @@ pub async fn install_update(app: &AppHandle) -> bool {
     };
     // Check again so the Update object matches the live feed.
     match updater.check().await {
-        Ok(Some(mut update)) => {
+        Ok(Some(update)) => {
             let pending = PENDING.lock().ok().and_then(|g| g.clone());
             let bytes = match pending {
                 Some(p) if p.version == update.version => Ok(p.bytes),
@@ -300,7 +299,6 @@ pub async fn install_update(app: &AppHandle) -> bool {
 /// The candidate is the artifact 1Boost itself downloaded and hash-verified
 /// earlier, so this does not widen the trust boundary; it is the recovery path
 /// for an update that installed but misbehaved.
-#[tauri::command]
 pub async fn rollback_update(app: AppHandle) -> Result<Option<String>, String> {
     let current = running_version();
     let Some((version, bytes)) = payload::rollback_candidate(&app, current) else {
