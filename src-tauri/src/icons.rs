@@ -61,7 +61,9 @@ extern "system" {
 extern "system" {
     fn CreateCompatibleDC(hdc: isize) -> isize;
     fn DeleteDC(hdc: isize) -> i32;
-    fn GetObject(hobj: isize, nbytes: u32, pv: *mut core::ffi::c_void) -> isize;
+    // `GetObject` is a header macro over the ANSI/Wide entry points; there is
+    // no plain `GetObject` export. The name argument is ignored for bitmaps.
+    fn GetObjectA(hobj: isize, cb: u32, pv: *mut core::ffi::c_void) -> isize;
     fn GetDIBits(hdc: isize, hbmp: isize, start: u32, lines: u32, bits: *mut u8, bi: *mut BitmapInfo, usage: u32) -> i32;
 }
 
@@ -138,7 +140,7 @@ unsafe fn hicon_to_png_data_url(hicon: isize) -> Option<String> {
     // produce garbage (or a PNG the webview refuses to draw). GetDIBits
     // converts the pixel format for us, so only the size has to match.
     let mut src: BitmapInfoHeader = std::mem::zeroed();
-    if GetObject(
+    if GetObjectA(
         bmp,
         std::mem::size_of::<BitmapInfoHeader>() as u32,
         &mut src as *mut BitmapInfoHeader as *mut core::ffi::c_void,
