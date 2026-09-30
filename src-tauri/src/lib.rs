@@ -45,10 +45,10 @@ const SAVE_TICK_MS: u64 = 250;
 const STARTUP_DELAY_MS: u64 = 15_000;
 const RECHECK_MS: u64 = 6 * 60 * 60_000;
 
-const DEFAULT_WIDTH: f64 = 1200.0;
-const DEFAULT_HEIGHT: f64 = 760.0;
-const MIN_WIDTH: f64 = 900.0;
-const MIN_HEIGHT: f64 = 600.0;
+const DEFAULT_WIDTH: f64 = 1360.0;
+const DEFAULT_HEIGHT: f64 = 880.0;
+const MIN_WIDTH: f64 = 1040.0;
+const MIN_HEIGHT: f64 = 680.0;
 
 #[cfg(windows)]
 const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
@@ -66,9 +66,44 @@ fn solid_backdrop(theme: &Theme) -> (u8, u8, u8) {
         Theme::SolidDark => (0x0a, 0x0c, 0x10),
         Theme::SolidWhite => (0xf7, 0xf8, 0xfa),
         Theme::Amoled => (0, 0, 0),
-        _ => (0x0a, 0x0c, 0x10),
+        Theme::WhiteGlass => (0xe8, 0xec, 0xf3),
+        Theme::DarkGlass => (0x0a, 0x0c, 0x10),
     }
 }
+
+/// Window background behind the (partly translucent) UI, plus the Win11
+/// backdrop effect for the glass themes.
+///
+/// Both are applied to the *existing* window on purpose: rebuilding the window
+/// to change the transparency class tore down the webview that issued the
+/// command, which is what made switching themes kill the app.
+fn apply_theme(app: &AppHandle) {
+    let theme = app.state::<AppState>().tracker.prefs().theme;
+    let Some(win) = app.get_webview_window("main") else { return };
+    let (r, g, b) = solid_backdrop(&theme);
+    let _ = win.set_background_color(tauri::window::Color(r, g, b, 0xff));
+    apply_backdrop_effect(&win, is_glass_theme(&theme));
+}
+
+#[cfg(windows)]
+fn apply_backdrop_effect(win: &tauri::WebviewWindow, glass: bool) {
+    use tauri::window::{Effect, EffectState, EffectsBuilder};
+    // Mica is the app-window backdrop on Windows 11 and stays smooth while
+    // resizing (Acrylic is documented to stutter on drag/resize). It is a
+    // no-op on Windows 10, where the theme falls back to the CSS surface.
+    let effects = if glass {
+        EffectsBuilder::new()
+            .effect(Effect::Mica)
+            .state(EffectState::Active)
+            .build()
+    } else {
+        EffectsBuilder::new().build()
+    };
+    let _ = win.set_effects(effects);
+}
+
+#[cfg(not(windows))]
+fn apply_backdrop_effect(_win: &tauri::WebviewWindow, _glass: bool) {}
 
 #[cfg(windows)]
 fn apply_native_window_chrome(window: &tauri::WebviewWindow) {
@@ -103,21 +138,21 @@ fn apply_native_window_chrome(_window: &tauri::WebviewWindow) {}
 #[allow(dead_code)]
 fn enable_windows10_corner_fallback(_window: &tauri::WebviewWindow) {}
 
-fn create_main_window(app: &AppHandle, transparent: bool) -> tauri::Result<tauri::WebviewWindow> {
-    let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+fn create_main_window(app: &AppHandle, theme: Theme) -> tauri::Result<tauri::WebviewWindow> {
+    let (r, g, b) = solid_backdrop(&theme);
+    WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
         .title("1Boost")
         .inner_size(DEFAULT_WIDTH, DEFAULT_HEIGHT)
         .min_inner_size(MIN_WIDTH, MIN_HEIGHT)
         .resizable(true)
-        .decorations(false)
-        .transparent(transparent)
+        // Native Windows title bar (min/max/close + snap layouts).
+        .decorations(true)
+        .transparent(false)
+        .background_color(tauri::window::Color(r, g, b, 0xff))
         .shadow(true)
         .visible(false)
-        .center();
-    if transparent {
-        builder = builder.background_color(tauri::window::Color(0, 0, 0, 0));
-    }
-    builder.build()
+        .center()
+        .build()
 }
 
 fn push_window_state(app: &AppHandle) {
@@ -235,31 +270,6 @@ fn hide_tray(app: &AppHandle) {
 
 /// Rebuild the window shell when the glass/solid theme class flips
 /// (Windows assigns transparency at creation).
-fn recreate_window(app: &AppHandle) {
-    let Some(old) = app.get_webview_window("main") else { return };
-    let maximized = old.is_maximized().unwrap_or(false);
-    let scale = old.scale_factor().unwrap_or(1.0);
-    let outer = old.outer_position().ok();
-    let size = old.inner_size().ok();
-    let theme = app.state::<AppState>().tracker.prefs().theme;
-    let transparent = is_glass_theme(&theme);
-    let _ = old.destroy();
-    if let Ok(win) = create_main_window(app, transparent) {
-        apply_native_window_chrome(&win);
-        if maximized {
-            let _ = win.maximize();
-        } else {
-            if let (Some(pos), Some(size)) = (outer, size) {
-                let _ = win.set_size(tauri::PhysicalSize::new(size.width, size.height));
-                let _ = win.set_position(tauri::PhysicalPosition::new(pos.x, pos.y));
-            }
-            let _ = scale;
-        }
-        let _ = win.show();
-        let _ = win.set_focus();
-    }
-    push_window_state(app);
-}
 
 // ---------------------------------------------------------------------------
 // Command payloads
@@ -365,12 +375,10 @@ fn set_pref(app: AppHandle, key: String, value: serde_json::Value) -> Result<Pre
     prefs = prefs.sanitized();
     st.tracker.set_prefs(prefs.clone());
 
-    if is_glass_theme(&old_theme) != is_glass_theme(&prefs.theme) {
-        let handle = app.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(120));
-            recreate_window(&handle);
-        });
+    if old_theme != prefs.theme {
+        // Repaint the existing window. Never rebuild it: destroying the window
+        // destroys the webview that is running this very command.
+        apply_theme(&app);
     }
     let _ = app.emit("oneboost://prefs-changed", prefs.clone());
     Ok(prefs)
@@ -477,13 +485,13 @@ fn get_history_page(app: AppHandle, offset: usize, limit: usize) -> HistoryPage 
 }
 
 #[tauri::command]
-fn get_app_detail(app: AppHandle, key: String) -> AppDetailData {
+async fn get_app_detail(app: AppHandle, key: String) -> AppDetailData {
     app.state::<AppState>().tracker.app_detail(&key)
 }
 
 #[tauri::command]
-fn get_apps_list(app: AppHandle) -> Vec<AppUsageItem> {
-    app.state::<AppState>().tracker.apps_list()
+async fn get_apps_list(app: AppHandle) -> Vec<AppUsageItem> {
+    app.state::<AppState>().tracker.apps_list_with_icons()
 }
 
 #[tauri::command]
@@ -563,11 +571,8 @@ fn start_titlebar_drag(app: AppHandle) {
 }
 
 #[tauri::command]
-fn notify_theme_class(app: AppHandle, glass: bool) {
-    let now_glass = is_glass_theme(&app.state::<AppState>().tracker.prefs().theme);
-    if now_glass != glass {
-        recreate_window(&app);
-    }
+fn notify_theme_class(app: AppHandle, _glass: bool) {
+    apply_theme(&app);
 }
 
 // Updates ---------------------------------------------------------------------
@@ -724,11 +729,11 @@ pub fn run() {
                 let _ = settings::sync_launch_at_login(&prefs);
             }
 
-            // Window: transparency class from the saved theme.
+            // Window: one shell for every theme (native title bar).
             let theme = app.state::<AppState>().tracker.prefs().theme;
-            let transparent = is_glass_theme(&theme);
-            let win = create_main_window(&handle, transparent)?;
+            let win = create_main_window(&handle, theme)?;
             apply_native_window_chrome(&win);
+            apply_theme(&handle);
 
             let h = handle.clone();
             win.on_window_event(move |event| match event {

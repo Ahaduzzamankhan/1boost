@@ -6,9 +6,6 @@ import {
   ChartNoAxesCombined,
   History as HistoryIcon,
   Settings as SettingsIcon,
-  Minus,
-  Square,
-  Copy,
   X,
   RefreshCw,
   Rocket,
@@ -37,51 +34,8 @@ const NAV: { id: PageId; label: string; icon: ReactNode }[] = [
   { id: 'history', label: 'History', icon: <HistoryIcon size={19} /> },
 ]
 
-function TitleBar() {
-  const [maximized, setMaximized] = useState(false)
-  useEffect(() => {
-    let alive = true
-    bridge.isMaximized().then((m) => {
-      if (alive) setMaximized(m)
-    })
-    const off = bridge.windowState((s) => {
-      if (alive) {
-        setMaximized(s.maximized)
-        // The window shell radius collapses while maximized so content reaches
-        // the true screen edges (see index.css .app radius).
-        document.documentElement.dataset.winMax = s.maximized ? '1' : '0'
-      }
-    })
-    return () => {
-      alive = false
-      off()
-    }
-  }, [])
-
-  return (
-    <div className="titlebar">
-      <div className="titlebar-title">
-        <BrandMark size={15} />
-        <span>1Boost</span>
-      </div>
-      <div className="titlebar-controls">
-        <button className="titlebar-btn" onClick={() => bridge.minimize()} aria-label="Minimize">
-          <Minus size={15} />
-        </button>
-        <button
-          className="titlebar-btn"
-          onClick={() => bridge.toggleMaximize()}
-          aria-label={maximized ? 'Restore' : 'Maximize'}
-        >
-          {maximized ? <Copy size={12} /> : <Square size={11} />}
-        </button>
-        <button className="titlebar-btn close" onClick={() => bridge.close()} aria-label="Close">
-          <X size={15} />
-        </button>
-      </div>
-    </div>
-  )
-}
+// The window uses the native Windows title bar, so there is no custom
+// titlebar to render here — the shell starts straight into the layout.
 
 function Toasts({ toasts }: { toasts: ToastMsg[] }) {
   if (toasts.length === 0) return null
@@ -189,7 +143,6 @@ export default function AppShell({
 
   return (
     <div className="app">
-      <TitleBar />
       <div className="body">
         <aside className="sidebar">
           <div className="sidebar-brand">

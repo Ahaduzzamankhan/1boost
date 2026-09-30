@@ -165,6 +165,12 @@ pub struct UsageData {
     pub pending_session: Option<PendingSession>,
     #[serde(default)]
     pub app_names: BTreeMap<String, String>,
+    /// App key → executable path. Added in 1.2.1: without it the shell icon
+    /// of an app could only be read in the session that first used it, so
+    /// every previously seen app fell back to the generic glyph. Optional and
+    /// ignored by older builds, so existing data files keep loading.
+    #[serde(default)]
+    pub app_paths: BTreeMap<String, String>,
 }
 
 impl UsageData {
@@ -179,6 +185,7 @@ impl UsageData {
             totals: Totals::default(),
             pending_session: None,
             app_names: BTreeMap::new(),
+            app_paths: BTreeMap::new(),
         }
     }
 }

@@ -144,6 +144,22 @@ pub fn normalize_usage_data(v: serde_json::Value) -> UsageData {
         })
         .unwrap_or_default();
 
+    // App key → exe path (1.2.1+). Absent in files written by earlier builds.
+    let app_paths = v
+        .get("appPaths")
+        .and_then(|a| a.as_object())
+        .map(|a| {
+            a.iter()
+                .filter(|(k, p)| {
+                    !k.is_empty()
+                        && k.len() <= 64
+                        && p.as_str().map(|s| s.len() > 3 && s.len() <= 512).unwrap_or(false)
+                })
+                .filter_map(|(k, p)| p.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
+
     let now = crate::util::now_ms();
     let mut data = UsageData {
         version: DATA_VERSION,
@@ -154,6 +170,7 @@ pub fn normalize_usage_data(v: serde_json::Value) -> UsageData {
         totals: Totals::default(),
         pending_session: pending,
         app_names,
+        app_paths,
     };
     rebuild_totals(&mut data);
     data

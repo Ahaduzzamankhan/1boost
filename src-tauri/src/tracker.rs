@@ -475,8 +475,21 @@ impl SharedTracker {
         t.icons.insert(key.to_string(), url);
     }
 
-    pub fn icon_for(&self, key: &str) -> Option<String> {
-        self.tracker.lock().unwrap().icons.get(key).cloned().flatten()
+    /// Icon for an app key, extracting it on demand for apps first seen in an
+    /// earlier session (their path came back with the persisted data).
+    /// Returns `None` when the app has no recorded path or extraction failed.
+    fn resolve_icon(&self, key: &str) -> Option<String> {
+        if let Some(hit) = self.tracker.lock().unwrap().icons.get(key) {
+            return hit.clone();
+        }
+        let exe_path = {
+            let storage = self.storage.lock().unwrap();
+            storage.data.app_paths.get(key).cloned()
+        }?;
+        let url = crate::icons::extract_icon_png_data_url(&exe_path);
+        let mut t = self.tracker.lock().unwrap();
+        t.icons.insert(key.to_string(), url.clone());
+        url
     }
 
     // -----------------------------------------------------------------------
@@ -552,6 +565,9 @@ impl SharedTracker {
     }
 
     pub fn app_detail(&self, key: &str) -> AppDetailData {
+        // Icon resolution takes the storage lock itself, so this one must be
+        // released first (std::sync::Mutex is not reentrant).
+        let icon_data_url = self.resolve_icon(key);
         let storage = self.storage.lock().unwrap();
         let name = storage
             .data
@@ -561,7 +577,6 @@ impl SharedTracker {
             .unwrap_or_else(|| app_display_name(key));
         let (total_ms, active_share, last_used_ms, per_day) =
             crate::aggregator::app_detail(&storage.data, key, &name);
-        let icon_data_url = self.icon_for(key);
         AppDetailData {
             identity: Identity { key: key.to_string(), name },
             total_ms,
@@ -600,6 +615,17 @@ impl SharedTracker {
                 last_used_ms: last_used.get(&a.key).copied(),
             })
             .collect()
+    }
+
+    /// `get_apps_list` payload with icons resolved lazily.
+    pub fn apps_list_with_icons(&self) -> Vec<AppUsageItem> {
+        let mut items = self.apps_list();
+        for item in &items {
+            if item.icon_data_url.is_none() {
+                item.icon_data_url = self.resolve_icon(&item.key);
+            }
+        }
+        items
     }
 
     /// Newest-first day summaries for get-initial (same shape as the TS port).
@@ -665,6 +691,14 @@ fn identity_for(t: &mut TrackerState, data: &mut UsageData, exe_path: &str) -> (
     t.identity_cache.insert(exe_path.to_string(), (key.clone(), name.clone()));
     if data.app_names.get(&key).map(|n| n.as_str()) != Some(name.as_str()) {
         data.app_names.insert(key.clone(), name.clone());
+        t.dirty = true;
+    }
+    // Remember where the app lives so its icon can be restored after a
+    // restart instead of falling back to the generic glyph forever.
+    if crate::icons::is_icon_candidate(exe_path)
+        && data.app_paths.get(&key).map(|p| p.as_str()) != Some(exe_path)
+    {
+        data.app_paths.insert(key.clone(), exe_path.to_string());
         t.dirty = true;
     }
     (key, name)

@@ -1,6 +1,14 @@
 //! Executable icon extraction (32×32 PNG data URLs) — replaces Electron's
 //! app.getFileIcon. Uses SHGetFileInfoW for the HICON, then GetDIBits to
 //! BGRA, and encodes a PNG in-process (tiny encoder, no image crate).
+//!
+//! Two rules from Win32 that this module depends on:
+//!   * the bitmaps handed back by GetIconInfo are owned by the icon handle —
+//!     deleting them corrupts the shell icon cache and every later lookup
+//!     (this is what made icons go missing / render as broken images);
+//!   * the icon bitmap is not guaranteed to be the size we asked for, so the
+//!     real dimensions are read back and anything else is rejected instead of
+//!     reinterpreting unrelated memory as pixels.
 
 const WIDTH: i32 = 32;
 const HEIGHT: i32 = 32;
@@ -53,13 +61,8 @@ extern "system" {
 extern "system" {
     fn CreateCompatibleDC(hdc: isize) -> isize;
     fn DeleteDC(hdc: isize) -> i32;
-    fn DeleteObject(obj: isize) -> i32;
+    fn GetObject(hobj: isize, nbytes: u32, pv: *mut core::ffi::c_void) -> isize;
     fn GetDIBits(hdc: isize, hbmp: isize, start: u32, lines: u32, bits: *mut u8, bi: *mut BitmapInfo, usage: u32) -> i32;
-}
-
-#[link(name = "kernel32")]
-extern "system" {
-    fn lstrlenW(s: *const u16) -> i32;
 }
 
 #[repr(C)]
@@ -81,28 +84,41 @@ fn to_wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+/// True when the string looks like a Windows executable path we can query.
+pub fn is_icon_candidate(exe_path: &str) -> bool {
+    !exe_path.is_empty() && exe_path.to_lowercase().ends_with(".exe")
+}
+
 /// Extract a 32×32 PNG data URL for an executable path. Returns None for
 /// non-exe paths or when extraction fails (same as the Electron version).
 pub fn extract_icon_png_data_url(exe_path: &str) -> Option<String> {
-    if exe_path.is_empty() || !exe_path.to_lowercase().ends_with(".exe") {
+    if !is_icon_candidate(exe_path) {
         return None;
     }
     unsafe {
         let wide = to_wide(exe_path);
-        let mut sfi: ShFileInfo = std::mem::zeroed();
-        let rc = SHGetFileInfoW(
-            wide.as_ptr(),
-            0,
-            &mut sfi,
-            std::mem::size_of::<ShFileInfo>() as u32,
-            SHGFI_ICON | SHGFI_LARGEICON,
-        );
-        if rc == 0 || sfi.h_icon == 0 {
-            return None;
+        // Large (32px) first, small (16px) as a fallback: some executables
+        // ship only a 16px resource.
+        for size_flag in [SHGFI_LARGEICON, SHGFI_SMALLICON] {
+            let mut sfi: ShFileInfo = std::mem::zeroed();
+            let rc = SHGetFileInfoW(
+                wide.as_ptr(),
+                0,
+                &mut sfi,
+                std::mem::size_of::<ShFileInfo>() as u32,
+                SHGFI_ICON | size_flag,
+            );
+            if rc == 0 || sfi.h_icon == 0 {
+                continue;
+            }
+            let result = hicon_to_png_data_url(sfi.h_icon);
+            // Only the HICON is ours to destroy; its bitmaps are not.
+            DestroyIcon(sfi.h_icon);
+            if result.is_some() {
+                return result;
+            }
         }
-        let result = hicon_to_png_data_url(sfi.h_icon);
-        DestroyIcon(sfi.h_icon);
-        result
+        None
     }
 }
 
@@ -113,13 +129,36 @@ unsafe fn hicon_to_png_data_url(hicon: isize) -> Option<String> {
     }
     let bmp = ii.hbm_color;
     if bmp == 0 {
-        if ii.hbm_mask != 0 {
-            DeleteObject(ii.hbm_mask);
-        }
+        // Monochrome icon: hbm_mask is a 1bpp bitmap we do not decode.
         return None;
     }
+
+    // Read the bitmap's real dimensions. We ask for the 32px icon, but a
+    // resource can still be a different size — decoding it as 32x32 would
+    // produce garbage (or a PNG the webview refuses to draw). GetDIBits
+    // converts the pixel format for us, so only the size has to match.
+    let mut src: BitmapInfoHeader = std::mem::zeroed();
+    if GetObject(
+        bmp,
+        std::mem::size_of::<BitmapInfoHeader>() as u32,
+        &mut src as *mut BitmapInfoHeader as *mut core::ffi::c_void,
+    ) == 0
+    {
+        return None;
+    }
+    if src.bi_width != WIDTH || src.bi_height.abs() != HEIGHT {
+        return None;
+    }
+
     let hdc_screen = GetDC(0);
+    if hdc_screen == 0 {
+        return None;
+    }
     let hdc = CreateCompatibleDC(hdc_screen);
+    if hdc == 0 {
+        ReleaseDC(0, hdc_screen);
+        return None;
+    }
     let mut bi: BitmapInfo = std::mem::zeroed();
     bi.bmi_header.bi_size = std::mem::size_of::<BitmapInfoHeader>() as u32;
     bi.bmi_header.bi_width = WIDTH;
@@ -129,22 +168,25 @@ unsafe fn hicon_to_png_data_url(hicon: isize) -> Option<String> {
     bi.bmi_header.bi_compression = BI_RGB;
 
     let mut pixels = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
-    let mut ok = false;
-    if GetDIBits(hdc, bmp, 0, HEIGHT as u32, pixels.as_mut_ptr(), &mut bi, DIB_RGB_COLORS) != 0 {
-        ok = true;
-        // BGRA → RGBA.
-        for px in pixels.chunks_exact_mut(4) {
-            px.swap(0, 2);
-        }
-    }
+    let ok = GetDIBits(
+        hdc,
+        bmp,
+        0,
+        HEIGHT as u32,
+        pixels.as_mut_ptr(),
+        &mut bi,
+        DIB_RGB_COLORS,
+    ) != 0;
     DeleteDC(hdc);
     ReleaseDC(0, hdc_screen);
-    DeleteObject(bmp);
-    if ii.hbm_mask != 0 {
-        DeleteObject(ii.hbm_mask);
-    }
+    // NOTE: hbm_color / hbm_mask belong to the icon — never DeleteObject here.
     if !ok {
         return None;
+    }
+
+    // BGRA → RGBA.
+    for px in pixels.chunks_exact_mut(4) {
+        px.swap(0, 2);
     }
     let png = encode_png(WIDTH as u32, HEIGHT as u32, &pixels);
     Some(format!("data:image/png;base64,{}", base64_encode(&png)))
@@ -240,4 +282,38 @@ fn base64_encode(data: &[u8]) -> String {
         out.push(if chunk.len() > 2 { B64[n as usize & 63] as char } else { '=' });
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_non_exe_paths() {
+        assert!(extract_icon_png_data_url("").is_none());
+        assert!(extract_icon_png_data_url("C:\\Windows\\System32\\notepad.dll").is_none());
+        assert!(!is_icon_candidate("C:\\x\\app.exe"));
+        assert!(is_icon_candidate("C:\\x\\APP.EXE"));
+    }
+
+    #[test]
+    fn encoder_produces_a_complete_png() {
+        let pixels = vec![7u8; (WIDTH * HEIGHT * 4) as usize];
+        let png = encode_png(WIDTH as u32, HEIGHT as u32, &pixels);
+        assert_eq!(&png[..8], &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]);
+        // IHDR payload: width/height 32, 8-bit RGBA.
+        assert_eq!(&png[16..20], &32u32.to_be_bytes());
+        assert_eq!(&png[20..24], &32u32.to_be_bytes());
+        assert_eq!(png[24], 8);
+        assert_eq!(png[25], 6);
+        // Must end with a complete IEND chunk: 4-byte length + "IEND" + CRC.
+        assert_eq!(&png[png.len() - 12..png.len() - 8], &[0, 0, 0, 0]);
+        assert_eq!(&png[png.len() - 8..png.len() - 4], b"IEND");
+    }
+
+    #[test]
+    fn base64_matches_reference() {
+        assert_eq!(base64_encode(b"hello"), "aGVsbG8=");
+        assert_eq!(base64_encode(b""), "");
+    }
 }
