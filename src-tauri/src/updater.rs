@@ -64,7 +64,7 @@ fn running_prerelease() -> bool {
 
 fn emit_state(app: &AppHandle, s: &UpdateStatePayload) {
     use tauri::Emitter;
-    let _ = app.emit("oneboost:update-state", s);
+    let _ = app.emit("oneboost://update-state", s);
 }
 
 async fn do_check(app: &AppHandle) -> UpdateStatePayload {

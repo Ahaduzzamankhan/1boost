@@ -19,7 +19,7 @@ mod util;
 
 use model::*;
 use monitor::MonitorPayload;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
@@ -100,6 +100,7 @@ fn apply_native_window_chrome(_window: &tauri::WebviewWindow) {}
 
 /// Needs the DWM feature in windows-sys; declared in Cargo.toml features.
 #[cfg(windows)]
+#[allow(dead_code)]
 fn enable_windows10_corner_fallback(_window: &tauri::WebviewWindow) {}
 
 fn create_main_window(app: &AppHandle, transparent: bool) -> tauri::Result<tauri::WebviewWindow> {
@@ -145,11 +146,12 @@ pub fn show_main(app: &AppHandle, page: Option<&str>) {
 
 fn update_tray_state(app: &AppHandle, paused: bool) {
     if let Some(tray) = app.tray_by_id("main-tray") {
-        let _ = tray.set_tooltip(Some(if paused {
+        let tip = if paused {
             "1Boost — tracking paused"
         } else {
             "1Boost — tracking your PC usage"
-        }));
+        };
+        let _ = tray.set_tooltip(Some(tip));
     }
     if let Some(toggle) = app.state::<AppState>().tray_toggle.lock().unwrap().as_ref() {
         let label = if paused { "Resume Tracking" } else { "Pause Tracking" };
@@ -223,7 +225,6 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
         *st.tray_toggle.lock().unwrap() = Some(toggle);
     }
     Ok(())
-}
 }
 
 fn hide_tray(app: &AppHandle) {
@@ -332,7 +333,8 @@ fn get_dashboard(app: AppHandle) -> DashboardData {
 
 #[tauri::command]
 fn get_monitor_sample(app: AppHandle) -> Option<MonitorPayload> {
-    app.state::<AppState>().monitor.current()
+    let st = app.state::<AppState>();
+    st.monitor.current()
 }
 
 #[tauri::command]
@@ -725,7 +727,7 @@ pub fn run() {
             // Window: transparency class from the saved theme.
             let theme = app.state::<AppState>().tracker.prefs().theme;
             let transparent = is_glass_theme(&theme);
-            let win = create_main_window(app.handle(), transparent)?;
+            let win = create_main_window(&handle, transparent)?;
             apply_native_window_chrome(&win);
 
             let h = handle.clone();

@@ -22,7 +22,7 @@ mod win {
         let mut hk: HKEY = 0;
         let access = if write { KEY_SET_VALUE | KEY_READ } else { KEY_QUERY_VALUE | KEY_READ };
         let rc = unsafe {
-            RegCreateKeyExW(HKEY_CURRENT_USER, run_key_wide(), 0, std::ptr::null(), 0, access, std::ptr::null(), &mut hk, std::ptr::null())
+            RegCreateKeyExW(HKEY_CURRENT_USER, run_key_wide(), 0, std::ptr::null(), 0, access, std::ptr::null(), &mut hk, std::ptr::null_mut())
         };
         if rc == 0 {
             Some(hk)
@@ -130,7 +130,7 @@ pub fn read_run_entry() -> Option<(String, String)> {
             win::QueryValue(
                 hk,
                 win::RUN_VALUE_WIDE.as_ptr(),
-                std::ptr::null(),
+                std::ptr::null_mut(),
                 &mut kind,
                 buf.as_mut_ptr(),
                 &mut len,

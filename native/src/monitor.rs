@@ -356,7 +356,7 @@ unsafe fn reg_read_string(subkey: &str, value: &str) -> Option<String> {
 /// CPU name, core count, GPU name and OS strings — read once at first sample.
 fn init_names() -> ([u16; 64], u32, [u16; 96], [u16; 96], [u16; 64]) {
     let mut cpu_name = [0u16; 64];
-    let mut cpu_cores: u32;
+    let cpu_cores: u32;
     let mut gpu_name = [0u16; 96];
     let mut os_name = [0u16; 96];
     let mut os_version = [0u16; 64];
