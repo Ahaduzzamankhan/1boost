@@ -81,7 +81,7 @@ fn apply_theme(app: &AppHandle) {
     let theme = app.state::<AppState>().tracker.prefs().theme;
     let Some(win) = app.get_webview_window("main") else { return };
     let (r, g, b) = solid_backdrop(&theme);
-    let _ = win.set_background_color(tauri::window::Color(r, g, b, 0xff));
+    let _ = win.set_background_color(Some(tauri::window::Color(r, g, b, 0xff)));
     apply_backdrop_effect(&win, is_glass_theme(&theme));
 }
 

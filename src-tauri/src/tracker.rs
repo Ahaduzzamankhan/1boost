@@ -620,7 +620,7 @@ impl SharedTracker {
     /// `get_apps_list` payload with icons resolved lazily.
     pub fn apps_list_with_icons(&self) -> Vec<AppUsageItem> {
         let mut items = self.apps_list();
-        for item in &items {
+        for item in items.iter_mut() {
             if item.icon_data_url.is_none() {
                 item.icon_data_url = self.resolve_icon(&item.key);
             }
