@@ -525,8 +525,8 @@ impl Vault {
                 hits.push(SearchHit {
                     kind: "app".into(),
                     id: key.clone(),
-                    title: name,
-                    subtitle: format!("{} tracked", human_duration(ms)),
+                    title: name.clone(),
+                    subtitle: format!("{} tracked", human_duration(*ms)),
                     score: score - 20,
                     target: "apps".into(),
                 });
