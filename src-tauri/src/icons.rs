@@ -36,16 +36,29 @@ struct BitmapInfo {
     bmi_colors: [u32; 1],
 }
 
+#[link(name = "shell32")]
 extern "system" {
     fn SHGetFileInfoW(path: *const u16, attrs: u32, psfi: *mut ShFileInfo, cbfi: u32, flags: u32) -> isize;
+}
+
+#[link(name = "user32")]
+extern "system" {
     fn GetIconInfo(hicon: isize, piconinfo: *mut IconInfoW) -> i32;
     fn GetDC(hwnd: isize) -> isize;
     fn ReleaseDC(hwnd: isize, hdc: isize) -> i32;
+    fn DestroyIcon(hicon: isize) -> i32;
+}
+
+#[link(name = "gdi32")]
+extern "system" {
     fn CreateCompatibleDC(hdc: isize) -> isize;
     fn DeleteDC(hdc: isize) -> i32;
     fn DeleteObject(obj: isize) -> i32;
-    fn DestroyIcon(hicon: isize) -> i32;
     fn GetDIBits(hdc: isize, hbmp: isize, start: u32, lines: u32, bits: *mut u8, bi: *mut BitmapInfo, usage: u32) -> i32;
+}
+
+#[link(name = "kernel32")]
+extern "system" {
     fn lstrlenW(s: *const u16) -> i32;
 }
 

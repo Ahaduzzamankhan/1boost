@@ -3,10 +3,10 @@
 //! trend/history assembly); pure logic, no I/O.
 
 use crate::model::*;
-use crate::util::{day_key, day_key_from_ymd, parse_day_key, shift_day_key, weekday_of_key};
+use crate::util::{day_key, parse_day_key, shift_day_key, weekday_of_key};
 use std::collections::BTreeMap;
 
-pub fn ensure_day(data: &mut UsageData, key: &str, now_ms: u64) -> &mut DayData {
+pub fn ensure_day<'a>(data: &'a mut UsageData, key: &'a str, now_ms: u64) -> &'a mut DayData {
     data.days
         .entry(key.to_string())
         .or_insert_with(|| DayData::empty(key.to_string(), now_ms))
@@ -61,7 +61,7 @@ pub fn top_apps_overall(data: &UsageData, limit: usize) -> Vec<AppAgg> {
     }
     let mut out: Vec<AppAgg> = acc
         .into_iter()
-        .map(|(key, ms)| AppAgg { key, name: key.clone(), ms })
+        .map(|(key, ms)| AppAgg { name: key.clone(), key, ms })
         .collect();
     out.sort_by(|a, b| b.ms.cmp(&a.ms).then_with(|| a.key.cmp(&b.key)));
     if limit > 0 {
@@ -263,12 +263,15 @@ pub fn build_dashboard(
     let apps: Vec<AppUsageItem> = top_apps_for_day(Some(&today), 0)
         .into_iter()
         .take(6)
-        .map(|a| AppUsageItem {
-            key: a.key.clone(),
-            name: opts.app_names.get(&a.key).cloned().unwrap_or(a.key),
-            ms: a.ms,
-            icon_data_url: opts.icons.get(&a.key).cloned().flatten(),
-            last_used_ms: last_used.get(&a.key).copied(),
+        .map(|a| {
+            let name = opts.app_names.get(&a.key).cloned().unwrap_or_else(|| a.key.clone());
+            AppUsageItem {
+                key: a.key.clone(),
+                name,
+                ms: a.ms,
+                icon_data_url: opts.icons.get(&a.key).cloned().flatten(),
+                last_used_ms: last_used.get(&a.key).copied(),
+            }
         })
         .collect();
 
@@ -305,7 +308,7 @@ pub struct DashboardOpts {
     pub days: i64,
 }
 
-pub fn app_detail(data: &UsageData, key: &str, name: &str) -> (u64, f64, Option<u64>, Vec<PerDayUse>) {
+pub fn app_detail(data: &UsageData, key: &str, _name: &str) -> (u64, f64, Option<u64>, Vec<PerDayUse>) {
     let mut total_ms: u64 = 0;
     let mut per_day = Vec::new();
     let mut last_used_ms: Option<u64> = None;
@@ -326,7 +329,7 @@ pub fn app_detail(data: &UsageData, key: &str, name: &str) -> (u64, f64, Option<
 
 /// Delta accumulation for one sample (mirrors applySampleToDay).
 pub struct ApplySample<'a> {
-    pub sample: &'a crate::api::Sample,
+    pub sample: &'a oneboost_native::api::Sample,
     pub delta_ms: u64,
     pub day: &'a mut DayData,
 }
@@ -417,4 +420,4 @@ pub fn per_day_uses(data: &UsageData, key: &str) -> Vec<PerDayUse> {
         .collect()
 }
 
-pub use day_key_from_ymd as day_key_from_parts;
+// (day_key_from_ymd lives in util; no re-export needed)

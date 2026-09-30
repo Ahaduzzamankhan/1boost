@@ -12,6 +12,7 @@
 //! a minisign signature produced at build time (TAURI_SIGNING_PRIVATE_KEY).
 
 use serde::Serialize;
+use std::sync::Mutex;
 use tauri::AppHandle;
 use tauri_plugin_updater::UpdaterExt;
 
@@ -76,8 +77,8 @@ async fn do_check(app: &AppHandle) -> UpdateStatePayload {
     };
     emit_state(app, &state_payload("checking", None, None, None, None, None));
     match updater.check().await {
-        Ok(Some(update)) => {
-            let version = update.current_version.clone();
+        Ok(Some(mut update)) => {
+            let version = update.version.clone();
             emit_state(
                 app,
                 &state_payload("downloading", Some(version.clone()), Some(0.0), Some(0), None, None),
@@ -87,8 +88,8 @@ async fn do_check(app: &AppHandle) -> UpdateStatePayload {
             let version2 = version.clone();
             let res = update
                 .download(
-                    move |_chunk, total| {
-                        downloaded += _chunk;
+                    move |chunk, total| {
+                        downloaded = downloaded.saturating_add(chunk as u64);
                         let pct = total
                             .map(|t| (downloaded as f64 / t as f64) * 100.0)
                             .unwrap_or(0.0);
@@ -104,15 +105,16 @@ async fn do_check(app: &AppHandle) -> UpdateStatePayload {
                             ),
                         );
                     },
-                    || false,
+                    || {},
                 )
                 .await;
             match res {
-                Ok(()) => {
-                    // The updater keeps the downloaded artifact inside its own
-                    // handle; installing requires the Update object, so we
-                    // store it for install_update().
-                    store_pending(app, version.clone());
+                Ok(bytes) => {
+                    // Cache the downloaded artifact so install_update() can
+                    // install it without a second download.
+                    if let Ok(mut g) = PENDING.lock() {
+                        *g = Some(PendingUpdate { version: version.clone(), bytes });
+                    }
                     let s = state_payload("ready", Some(version), Some(100.0), None, None, None);
                     emit_state(app, &s);
                     s
@@ -137,16 +139,15 @@ async fn do_check(app: &AppHandle) -> UpdateStatePayload {
     }
 }
 
-static PENDING: Mutex<Option<String>> = Mutex::new(None);
-
-#[allow(dead_code)]
-fn store_pending(_app: &AppHandle, version: String) {
-    if let Ok(mut g) = PENDING.lock() {
-        *g = Some(version);
-    }
+#[derive(Clone)]
+struct PendingUpdate {
+    version: String,
+    bytes: Vec<u8>,
 }
 
-pub async fn update_state(app: &AppHandle) -> UpdateStatePayload {
+static PENDING: Mutex<Option<PendingUpdate>> = Mutex::new(None);
+
+pub async fn update_state(_app: &AppHandle) -> UpdateStatePayload {
     // Non-mutating snapshot: the UI polls this on load.
     state_payload("idle", None, None, None, None, None)
 }
@@ -173,13 +174,24 @@ pub async fn install_update(app: &AppHandle) -> bool {
         Ok(u) => u,
         Err(_) => return false,
     };
-    // Check again and install immediately if an update is available.
+    // Check again so the Update object matches the live feed.
     match updater.check().await {
-        Ok(Some(update)) => {
-            let _ = update.install();
-            // install() relaunches the app on Windows (NSIS); ExitRequested
-            // stops the tracker via RunEvent handling in lib.rs.
-            true
+        Ok(Some(mut update)) => {
+            let pending = PENDING.lock().ok().and_then(|g| g.clone());
+            let bytes = match pending {
+                Some(p) if p.version == update.version => Ok(p.bytes),
+                // Background download never completed — fetch now.
+                _ => update.download(|_, _| {}, || {}).await,
+            };
+            match bytes {
+                // install() replaces the binary and relaunches (NSIS);
+                // ExitRequested stops the tracker via RunEvent handling.
+                Ok(b) => {
+                    let _ = update.install(&b);
+                    true
+                }
+                Err(_) => false,
+            }
         }
         _ => false,
     }

@@ -6,6 +6,7 @@
 
 use crate::aggregator::rebuild_totals;
 use crate::model::*;
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};

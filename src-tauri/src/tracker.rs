@@ -15,7 +15,7 @@ use crate::storage::Storage;
 use crate::util::{day_key, now_ms};
 use oneboost_native::api as native;
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -489,7 +489,7 @@ impl SharedTracker {
         let stats = session_stats(&storage.data);
         let overall = top_apps_overall(&storage.data, 1).into_iter().next();
         StatsOverview {
-            totals,
+            active_days: totals.days,
             avg_day_active_ms: totals.active_ms as f64 / days as f64,
             avg_day_on_ms: totals.pc_on_ms as f64 / days as f64,
             avg_session_ms: stats.avg_session_ms,
@@ -504,7 +504,7 @@ impl SharedTracker {
                     .unwrap_or_else(|| app_display_name(&a.key)),
                 ms: a.ms,
             }),
-            active_days: totals.days,
+            totals: totals.clone(),
         }
     }
 

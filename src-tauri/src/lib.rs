@@ -19,11 +19,12 @@ mod util;
 
 use model::*;
 use monitor::MonitorPayload;
-use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri_plugin_opener::OpenerExt;
 use tracker::SharedTracker;
 use util::now_ms;
 
@@ -31,6 +32,9 @@ pub struct AppState {
     pub tracker: Arc<SharedTracker>,
     pub monitor: monitor::Monitor,
     pub tray_handle: Mutex<Option<tauri::tray::TrayIcon>>,
+    /// Handle of the tray "toggle" item, so its label can be updated without
+    /// rebuilding the menu (TrayIcon has no menu accessor in Tauri 2).
+    pub tray_toggle: Mutex<Option<MenuItem<tauri::Wry>>>,
     quitting: AtomicBool,
 }
 
@@ -141,23 +145,19 @@ pub fn show_main(app: &AppHandle, page: Option<&str>) {
 
 fn update_tray_state(app: &AppHandle, paused: bool) {
     if let Some(tray) = app.tray_by_id("main-tray") {
-        let _ = tray.set_tooltip(if paused {
+        let _ = tray.set_tooltip(Some(if paused {
             "1Boost — tracking paused"
         } else {
             "1Boost — tracking your PC usage"
-        });
+        }));
+    }
+    if let Some(toggle) = app.state::<AppState>().tray_toggle.lock().unwrap().as_ref() {
         let label = if paused { "Resume Tracking" } else { "Pause Tracking" };
-        if let Some(menu) = tray.menu() {
-            if let Some(item) = menu.get("toggle") {
-                if let Some(mi) = item.as_menuitem() {
-                    let _ = mi.set_text(label);
-                }
-            }
-        }
+        let _ = toggle.set_text(label);
     }
 }
 
-fn build_tray_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+fn build_tray_menu(app: &AppHandle) -> tauri::Result<(tauri::menu::Menu<tauri::Wry>, MenuItem<tauri::Wry>)> {
     let paused = app.state::<AppState>().tracker.prefs().pause_tracking;
     let brand = MenuItem::with_id(app, "brand", "1Boost", false, None::<&str>)?;
     let open = MenuItem::with_id(app, "open", "Open Dashboard", true, None::<&str>)?;
@@ -165,7 +165,8 @@ fn build_tray_menu(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wr
         MenuItem::with_id(app, "toggle", if paused { "Resume Tracking" } else { "Pause Tracking" }, true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
     let exit = MenuItem::with_id(app, "exit", "Exit 1Boost", true, None::<&str>)?;
-    Menu::with_items(app, &[&brand, &open, &toggle, &settings, &exit])
+    let menu = Menu::with_items(app, &[&brand, &open, &toggle, &settings, &exit])?;
+    Ok((menu, toggle))
 }
 
 pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
@@ -175,7 +176,7 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
         }
         return Ok(());
     }
-    let menu = build_tray_menu(app)?;
+    let (menu, toggle) = build_tray_menu(app)?;
     let mut builder = TrayIconBuilder::with_id("main-tray")
         .menu(&menu)
         .show_menu_on_left_click(false)
@@ -216,8 +217,13 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
         builder = builder.icon(icon);
     }
     let tray = builder.build(app)?;
-    *app.state::<AppState>().tray_handle.lock().unwrap() = Some(tray);
+    {
+        let st = app.state::<AppState>();
+        *st.tray_handle.lock().unwrap() = Some(tray);
+        *st.tray_toggle.lock().unwrap() = Some(toggle);
+    }
     Ok(())
+}
 }
 
 fn hide_tray(app: &AppHandle) {
@@ -619,7 +625,7 @@ fn run_loop(app: AppHandle) {
         if stop_flag.load(Ordering::Relaxed) {
             return;
         }
-        let Ok(st) = app.try_state::<AppState>() else { return };
+        let Some(st) = app.try_state::<AppState>() else { return };
         if last_event.elapsed().as_millis() as u64 >= EVENT_POLL_MS {
             last_event = std::time::Instant::now();
             st.tracker.pump_native_events();
@@ -659,12 +665,6 @@ fn run_loop(app: AppHandle) {
 pub fn run() {
     let storage = storage::Storage::new();
     let tracker = Arc::new(SharedTracker::new(storage));
-    let app_state = AppState {
-        tracker,
-        monitor: monitor::Monitor::new(),
-        tray_handle: Mutex::new(None),
-        quitting: AtomicBool::new(false),
-    };
 
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -675,7 +675,6 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             get_initial,
             get_dashboard,
@@ -708,6 +707,13 @@ pub fn run() {
         ])
         .setup(|app| {
             let handle = app.handle().clone();
+            app.manage(AppState {
+                tracker: tracker.clone(),
+                monitor: monitor::Monitor::new(),
+                tray_handle: Mutex::new(None),
+                tray_toggle: Mutex::new(None),
+                quitting: AtomicBool::new(false),
+            });
 
             // Login item: re-assert saved pref (repairs stale Electron paths).
             {
@@ -719,7 +725,7 @@ pub fn run() {
             // Window: transparency class from the saved theme.
             let theme = app.state::<AppState>().tracker.prefs().theme;
             let transparent = is_glass_theme(&theme);
-            let win = create_main_window(app, transparent)?;
+            let win = create_main_window(app.handle(), transparent)?;
             apply_native_window_chrome(&win);
 
             let h = handle.clone();
@@ -739,7 +745,7 @@ pub fn run() {
 
             // Tray (respect showTray pref).
             if app.state::<AppState>().tracker.prefs().show_tray {
-                setup_tray(handle.clone())?;
+                setup_tray(&handle)?;
             }
 
             // Start the native tracking layer + background run loop.

@@ -6,11 +6,9 @@
 use crate::model::{LaunchState, Prefs};
 use std::path::PathBuf;
 
-const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
-const RUN_VALUE_NAME: &str = "1Boost";
-
 #[cfg(windows)]
 mod win {
+    use super::LazyWide;
     use windows_sys::Win32::System::Registry::{
         RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW,
         RegSetValueExW, HKEY, HKEY_CURRENT_USER, KEY_QUERY_VALUE, KEY_READ, KEY_SET_VALUE,
@@ -21,7 +19,7 @@ mod win {
     pub const REG_EXPAND_SZ_T: u32 = REG_EXPAND_SZ;
 
     pub fn open_key(write: bool) -> Option<HKEY> {
-        let mut hk: HKEY = std::ptr::null_mut();
+        let mut hk: HKEY = 0;
         let access = if write { KEY_SET_VALUE | KEY_READ } else { KEY_QUERY_VALUE | KEY_READ };
         let rc = unsafe {
             RegCreateKeyExW(HKEY_CURRENT_USER, run_key_wide(), 0, std::ptr::null(), 0, access, std::ptr::null(), &mut hk, std::ptr::null())
@@ -37,14 +35,14 @@ mod win {
         RUN_KEY_WIDE.as_ptr()
     }
 
-    pub static RUN_KEY_WIDE: once_wide::Wide = once_wide::Wide::new(
+    pub static RUN_KEY_WIDE: LazyWide = LazyWide::new(
         "Software\\Microsoft\\Windows\\CurrentVersion\\Run",
     );
-    pub static RUN_VALUE_WIDE: once_wide::Wide = once_wide::Wide::new("1Boost");
+    pub static RUN_VALUE_WIDE: LazyWide = LazyWide::new("1Boost");
 
     // Fallback open for probing without creating.
     pub fn probe_key() -> Option<HKEY> {
-        let mut hk: HKEY = std::ptr::null_mut();
+        let mut hk: HKEY = 0;
         let rc = unsafe {
             RegOpenKeyExW(HKEY_CURRENT_USER, run_key_wide(), 0, KEY_READ, &mut hk)
         };
@@ -61,21 +59,22 @@ mod win {
     };
 }
 
-mod once_wide {
-    /// Const-encoded UTF-16 with NUL, materialized lazily as a leaked slice
-    /// (no runtime allocation per call).
-    pub struct Wide {
-        encoded: fn() -> Vec<u16>,
-        cell: std::sync::OnceLock<Vec<u16>>,
-    }
+/// Lazily-encoded static UTF-16 (with trailing NUL) — no per-call allocation
+/// after first use. `encode_utf16` can't run in const fn, so the string is
+/// stored and encoded once via OnceLock.
+struct LazyWide {
+    s: &'static str,
+    cell: std::sync::OnceLock<Vec<u16>>,
+}
 
-    impl Wide {
-        pub const fn new(s: &'static str) -> Wide {
-            Wide { encoded: || s.encode_utf16().chain(std::iter::once(0)).collect(), cell: std::sync::OnceLock::new() }
-        }
-        pub fn as_ptr(&self) -> *const u16 {
-            self.cell.get_or_init(self.encoded).as_ptr()
-        }
+impl LazyWide {
+    const fn new(s: &'static str) -> LazyWide {
+        LazyWide { s, cell: std::sync::OnceLock::new() }
+    }
+    fn as_ptr(&self) -> *const u16 {
+        self.cell
+            .get_or_init(|| self.s.encode_utf16().chain(std::iter::once(0)).collect())
+            .as_ptr()
     }
 }
 
@@ -131,7 +130,7 @@ pub fn read_run_entry() -> Option<(String, String)> {
             win::QueryValue(
                 hk,
                 win::RUN_VALUE_WIDE.as_ptr(),
-                std::ptr::null_mut(),
+                std::ptr::null(),
                 &mut kind,
                 buf.as_mut_ptr(),
                 &mut len,

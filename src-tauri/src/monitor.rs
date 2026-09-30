@@ -4,52 +4,67 @@
 
 use oneboost_native::api::{self, MonitorSample};
 use std::sync::Mutex;
-use std::time::Instant;
 
 pub type MonitorPayload = MonitorSample;
 
 const STALE_FAILS_LOG: u32 = 30;
 
 pub struct Monitor {
-    last: Option<MonitorSample>,
-    last_error: Option<String>,
-    failures: u32,
-    prev_instant: Option<Instant>,
+    last: Mutex<Option<MonitorSample>>,
+    last_error: Mutex<Option<String>>,
+    failures: Mutex<u32>,
 }
 
 static MON_LOCK: Mutex<()> = Mutex::new(());
 
 impl Monitor {
     pub fn new() -> Monitor {
-        Monitor { last: None, last_error: None, failures: 0, prev_instant: None }
+        Monitor {
+            last: Mutex::new(None),
+            last_error: Mutex::new(None),
+            failures: Mutex::new(0),
+        }
     }
 
-    pub fn set_last(&mut self, s: MonitorSample) {
-        self.last = Some(s);
-        self.failures = 0;
+    pub fn set_last(&self, s: MonitorSample) {
+        if let Ok(mut g) = self.last.lock() {
+            *g = Some(s);
+        }
+        if let Ok(mut f) = self.failures.lock() {
+            *f = 0;
+        }
     }
 
     /// Latest cached sample; samples once when nothing is cached yet.
-    pub fn current(&mut self) -> Option<MonitorSample> {
-        if self.last.is_none() {
-            return sample_once().map(|s| {
-                self.last = Some(s.clone());
-                s
-            });
+    pub fn current(&self) -> Option<MonitorSample> {
+        if let Ok(g) = self.last.lock() {
+            if let Some(s) = g.as_ref() {
+                return Some(s.clone());
+            }
         }
-        self.last.clone()
+        let s = sample_once()?;
+        if let Ok(mut g) = self.last.lock() {
+            *g = Some(s.clone());
+        }
+        Some(s)
     }
 
-    pub fn note_failure(&mut self, e: String) {
-        self.failures += 1;
-        self.last_error = Some(e);
-        if self.failures == 1 || self.failures % STALE_FAILS_LOG == 0 {
-            log::error!("[1boost] monitoring sample failed: {}", self.last_error.clone().unwrap_or_default());
+    pub fn note_failure(&self, e: String) {
+        let count = self.failures.lock().map(|mut f| {
+            *f += 1;
+            *f
+        }).unwrap_or(0);
+        if let Ok(mut le) = self.last_error.lock() {
+            *le = Some(e);
+        }
+        if count == 1 || count % STALE_FAILS_LOG == 0 {
+            let msg = self.last_error.lock().ok().and_then(|g| g.clone()).unwrap_or_default();
+            log::error!("[1boost] monitoring sample failed: {}", msg);
         }
     }
 
     pub fn last_error(&self) -> Option<String> {
-        self.last_error.clone()
+        self.last_error.lock().ok().and_then(|g| g.clone())
     }
 }
 
