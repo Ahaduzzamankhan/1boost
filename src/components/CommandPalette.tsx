@@ -121,6 +121,16 @@ export default function CommandPalette({
     setCursor((c) => Math.min(c, Math.max(0, rows.length - 1)))
   }, [rows.length])
 
+  // Keep the active row visible while arrowing through a long list.
+  // Every hook must run before the `if (!open)` early return below — an
+  // effect declared after it changes React's hook count when the palette
+  // opens and tears down the whole tree (a black screen).
+  useEffect(() => {
+    if (!open) return
+    const el = listRef.current?.querySelector<HTMLElement>(`[data-idx="${cursor}"]`)
+    el?.scrollIntoView({ block: 'nearest' })
+  }, [cursor, open])
+
   const activate = useCallback(
     (row: Row | undefined) => {
       if (!row) return
@@ -155,12 +165,6 @@ export default function CommandPalette({
       activate(rows[cursor])
     }
   }
-
-  // Keep the active row visible while arrowing through a long list.
-  useEffect(() => {
-    const el = listRef.current?.querySelector<HTMLElement>(`[data-idx="${cursor}"]`)
-    el?.scrollIntoView({ block: 'nearest' })
-  }, [cursor])
 
   return createPortal(
     <div className="palette-overlay" onMouseDown={onClose} role="presentation">

@@ -4,6 +4,22 @@ All notable changes to 1Boost are documented here. The latest release's
 section is injected into the GitHub Release body by CI
 (`scripts/release-notes.mjs`).
 
+## [1.3.1] - 2026-09-30
+
+### Fixed
+
+- **Black screen when searching** — the command palette declared a `useEffect`
+  *after* its `if (!open) return null`, so the first keystroke that opened it
+  changed React's hook count. React tore the whole tree down instead of showing
+  results, leaving an empty window. The effect is hoisted above the early
+  return and gated on `open`.
+- **Command palette and quick capture could not reach the active workspace** —
+  the shell read the focus context from a provider it rendered *inside* its own
+  subtree, so every focus target resolved to the no-op default and jumping to a
+  module from the palette did nothing. The provider now wraps the shell.
+- A regression test (`tests/shell.test.ts`) walks every renderer component and
+  fails the build if a hook is ever declared after an early return again.
+
 ## [1.3.0] - 2026-09-30
 
 ### Added

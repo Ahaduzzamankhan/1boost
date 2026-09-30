@@ -190,7 +190,23 @@ function ModuleArea({
   return <ModuleBoundary id={page} />
 }
 
-export default function AppShell({
+/** Outer shell: owns the nav context so the sidebar and overlays can hand
+ *  focus targets to modules. */
+export default function AppShell(props: {
+  prefs: Prefs
+  toasts: ToastMsg[]
+  storage: { file: string; bytes: number; recovered: boolean; healthy: boolean } | null
+  onDelete: () => Promise<void>
+  version: string
+}) {
+  return (
+    <NavProvider>
+      <Shell {...props} />
+    </NavProvider>
+  )
+}
+
+function Shell({
   prefs,
   toasts,
   storage,
@@ -317,15 +333,13 @@ export default function AppShell({
         </aside>
 
         <main className="content" id="main-content">
-          <NavProvider>
-            <ModuleArea
-              page={page}
-              prefs={prefs}
-              storage={storage}
-              onDelete={onDelete}
-              version={version}
-            />
-          </NavProvider>
+          <ModuleArea
+            page={page}
+            prefs={prefs}
+            storage={storage}
+            onDelete={onDelete}
+            version={version}
+          />
         </main>
       </div>
 
