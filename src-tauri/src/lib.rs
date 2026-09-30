@@ -707,7 +707,7 @@ pub fn run() {
             check_for_updates,
             install_update,
         ])
-        .setup(|app| {
+        .setup(move |app| {
             let handle = app.handle().clone();
             app.manage(AppState {
                 tracker: tracker.clone(),

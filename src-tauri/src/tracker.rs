@@ -136,7 +136,7 @@ impl SharedTracker {
 
         let burst;
         let s = {
-            let t = self.tracker.lock().unwrap();
+            let mut t = self.tracker.lock().unwrap();
             burst = now_ms() < t.wake_burst_until;
             match native::collect_once(idle_threshold_ms) {
                 Some(s) => {
@@ -170,7 +170,8 @@ impl SharedTracker {
         let prev_day_same = storage.data.days.contains_key(&key);
         ensure_day(&mut storage.data, &key, now);
         if !prev_day_same {
-            trim_to_retention(&mut storage.data, storage.settings.prefs.keep_history_days, now_ms());
+            let keep = storage.settings.prefs.keep_history_days;
+            trim_to_retention(&mut storage.data, keep, now_ms());
         }
 
         // Gap guard: never count long unaccounted gaps as usage.

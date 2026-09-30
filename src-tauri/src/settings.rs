@@ -10,20 +10,18 @@ use std::path::PathBuf;
 mod win {
     use super::LazyWide;
     use windows_sys::Win32::System::Registry::{
-        RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW,
-        RegSetValueExW, HKEY, HKEY_CURRENT_USER, KEY_QUERY_VALUE, KEY_READ, KEY_SET_VALUE,
-        REG_EXPAND_SZ, REG_SZ,
+        RegCreateKeyW, RegOpenKeyExW, HKEY, HKEY_CURRENT_USER, KEY_READ, REG_EXPAND_SZ, REG_SZ,
     };
 
     pub const REG_SZ_T: u32 = REG_SZ;
     pub const REG_EXPAND_SZ_T: u32 = REG_EXPAND_SZ;
 
-    pub fn open_key(write: bool) -> Option<HKEY> {
+    /// Opens (creating if needed) the HKCU Run key. windows-sys 0.52 only
+    /// exposes the legacy RegCreateKeyW (no Ex variant); it opens with full
+    /// access which is what we need for our own value.
+    pub fn open_key(_write: bool) -> Option<HKEY> {
         let mut hk: HKEY = 0;
-        let access = if write { KEY_SET_VALUE | KEY_READ } else { KEY_QUERY_VALUE | KEY_READ };
-        let rc = unsafe {
-            RegCreateKeyExW(HKEY_CURRENT_USER, run_key_wide(), 0, std::ptr::null(), 0, access, std::ptr::null(), &mut hk, std::ptr::null_mut())
-        };
+        let rc = unsafe { RegCreateKeyW(HKEY_CURRENT_USER, run_key_wide(), &mut hk) };
         if rc == 0 {
             Some(hk)
         } else {
