@@ -147,9 +147,10 @@ npm run tauri:dev           # run the desktop app in dev mode
 npm run typecheck && npm test   # typecheck + unit tests (aggregation, formatting, sessions)
 ```
 
-The packaged build is `npm run tauri:build` (Windows NSIS x64 installer,
-signed update artifacts when `TAURI_SIGNING_PRIVATE_KEY` is set). Regenerate
-Tauri icons after changing artwork with `npm run icons:tauri`.
+The packaged build is `npm run tauri:build` (Windows NSIS x64 installer).
+Updatersign artifacts are produced when `TAURI_SIGNING_PRIVATE_KEY` is
+available in the environment (or in `.github/signing/updater-credentials.json`
+for CI). Regenerate Tauri icons after changing artwork with `npm run icons:tauri`.
 
 `legacy/aggregator.ts` keeps the original TypeScript aggregation logic and
 data-shape constants, used by the unit tests and as a reference for the Rust
@@ -163,15 +164,29 @@ using [tauri-action](https://github.com/tauri-apps/tauri-action):
 1. Bump `version` in `package.json` **and** `src-tauri/tauri.conf.json`.
 2. Commit and tag: `git tag v1.2.0 && git push origin v1.2.0`.
 3. The workflow builds the Rust layer + NSIS x64 installer, signs the update
-   bundle with `TAURI_SIGNING_PRIVATE_KEY`, and publishes a GitHub Release
-   with `1Boost-Setup-<version>-x64-setup.exe` (+ `.sig`) and a generated
-   `latest.json`.
+   bundle, and publishes a GitHub Release with
+   `1Boost_<version>_x64-setup.exe`, the `.nsis.zip` updater payload (+
+   `.sig`), `latest.json`, and `latest.yml` (the electron-updater feed that
+   carries v1.1.x installs over to the Tauri build), using the `1.2.0` section
+   of [`CHANGELOG.md`](CHANGELOG.md) as the release body.
 
 Installed apps auto-update from the same Releases feed via the Tauri updater
-(`plugins.updater` endpoint in `tauri.conf.json`). Secrets required by CI:
-`TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`; the
-matching minisign **public** key must be set in `tauri.conf.json` →
-`plugins.updater.pubkey`.
+(`plugins.updater` endpoint in `tauri.conf.json`).
+
+### Update signing key
+
+The keypair lives in `.github/signing/updater-credentials.json`; CI verifies it
+by signing a probe before the Rust build and then masks it in the log. If the
+repository has a `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+Actions **secret**, that is used instead and the file is only the fallback.
+
+> [!WARNING]
+> This repository is public, so the committed private key is public too.
+> Anyone holding it can sign an update that installed copies of 1Boost accept.
+> Keep the file readable only to people who already trust the repository, and
+> rotate it (`npx tauri signer generate -w <file>` plus a new
+> `plugins.updater.pubkey` in `tauri.conf.json`) if it is ever exposed further.
+> A private (or paid) repository plus an Actions secret removes the concern.
 
 The tag must match the `tauri.conf.json` version (the workflow verifies it).
 

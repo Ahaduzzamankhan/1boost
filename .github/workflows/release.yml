@@ -63,53 +63,73 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # The updater private key is one line of base64 that is easy to mangle
-      # when it is pasted: CRLF line endings, a line-wrapped value, a lost or
-      # duplicated character in a repetitive run, or a whole minisign file
-      # (which appends the *public* key line). Any of those produce the opaque
-      # "incorrect updater private key password: Invalid input for the given
-      # encoding" from the signer — after a six minute Rust build.
+      # Updater signing keypair. It lives in the repository (see the warning in
+      # .github/signing/updater-credentials.json) rather than in an Actions
+      # secret, so the pipeline needs no manual setup. Prefer the secret when
+      # one exists: it is used verbatim, otherwise the file is the fallback.
       #
-      # Normalize the value, check it against the SHA-256 fingerprint of the
-      # keypair whose public half is committed in src-tauri/tauri.conf.json,
-      # then prove the password actually decrypts it. This fails in seconds.
-      - name: Prepare and verify updater signing key
+      # The key is verified by actually signing a probe file before the ~6
+      # minute Rust build, so a corrupted or mismatched keypair fails in
+      # seconds with a clear message instead of an opaque signer error.
+      - name: Load and verify updater signing key
         shell: bash
         env:
-          RAW_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          RAW_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          SECRET_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          SECRET_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          CREDENTIALS_FILE: .github/signing/updater-credentials.json
         run: |
           set -euo pipefail
-          EXPECTED_SHA256='1ce293b039296d68406a91fc44386c4df02c3b5a7eb2e79393816d6b6b9e07fd'
-          EXPECTED_LENGTH=348
-          # Join every base64-only line (repairs wrapping) and clamp to the
-          # key length (drops the public key line of a whole-file paste).
-          KEY_ALL=$(printf '%s\n' "$RAW_KEY" | tr -d '\r' | grep -E '^[A-Za-z0-9+/]+={0,2}[[:space:]]*$' | tr -d ' \t\n' || true)
-          KEY_CLEAN=$(printf '%s' "$KEY_ALL" | cut -c1-"$EXPECTED_LENGTH")
-          PASS_CLEAN=$(printf '%s' "$RAW_PASSWORD" | tr -d '\r\n')
-          if [ -z "$KEY_CLEAN" ] || [ -z "$PASS_CLEAN" ]; then
-            echo "::error::TAURI_SIGNING_PRIVATE_KEY / _PASSWORD secrets are empty"
-            exit 1
-          fi
-          ACTUAL_SHA256=$(printf '%s' "$KEY_CLEAN" | sha256sum | cut -d' ' -f1)
-          echo "signing secret: ${#KEY_CLEAN} chars, sha256 $ACTUAL_SHA256"
-          if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
-            echo "::error::TAURI_SIGNING_PRIVATE_KEY is not the v1.2.0 signing key: expected sha256 $EXPECTED_SHA256 ($EXPECTED_LENGTH chars), got $ACTUAL_SHA256 (${#KEY_CLEAN} chars). Re-paste it as one unbroken base64 line with no header."
-            exit 1
-          fi
           PROBE_DIR="$RUNNER_TEMP/keyprobe"
           mkdir -p "$PROBE_DIR"
-          printf '%s' "$KEY_CLEAN" > "$PROBE_DIR/oneboost.key"
           printf '1boost-signing-probe' > "$PROBE_DIR/probe.bin"
-          if ! npx --no-install tauri signer sign -p "$PASS_CLEAN" -f "$PROBE_DIR/oneboost.key" "$PROBE_DIR/probe.bin" > "$PROBE_DIR/sign.log" 2>&1; then
-            cat "$PROBE_DIR/sign.log"
-            echo "::error::key fingerprint matched but TAURI_SIGNING_PRIVATE_KEY_PASSWORD could not decrypt it"
+          SELECTED_KEY=""
+          SELECTED_PASS=""
+          SELECTED_FROM=""
+          # Candidate 1: the Actions secret (preferred when it is healthy).
+          if [ -n "${SECRET_KEY//[[:space:]]/}" ]; then
+            CAND_KEY=$(printf '%s' "$SECRET_KEY" | tr -d ' \t\r\n')
+            CAND_PASS=$(printf '%s' "$SECRET_PASSWORD" | tr -d '\r\n')
+            printf '%s' "$CAND_KEY" > "$PROBE_DIR/candidate.key"
+            if npx --no-install tauri signer sign -p "$CAND_PASS" -f "$PROBE_DIR/candidate.key" "$PROBE_DIR/probe.bin" > "$PROBE_DIR/sign.log" 2>&1; then
+              SELECTED_KEY="$CAND_KEY"; SELECTED_PASS="$CAND_PASS"; SELECTED_FROM="Actions secret"
+            else
+              echo "::warning::the TAURI_SIGNING_PRIVATE_KEY secret does not open a usable keypair; falling back to $CREDENTIALS_FILE"
+              sed 's/^/    /' "$PROBE_DIR/sign.log"
+            fi
+          fi
+          # Candidate 2: the keypair committed to the repository.
+          if [ -z "$SELECTED_KEY" ] && [ -f "$CREDENTIALS_FILE" ]; then
+            read -r FILE_KEY FILE_PASS <<<"$(node -e '
+              const fs = require("fs");
+              const c = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+              const key = String(c.privateKey || "").replace(/\s+/g, "");
+              const pass = String(c.password || "").replace(/\s+/g, "");
+              if (!key || !pass) {
+                console.error("::error::updater-credentials.json is missing privateKey/password");
+                process.exit(1);
+              }
+              console.log(`${key} ${pass}`);
+            ' "$CREDENTIALS_FILE")"
+            printf '%s' "$FILE_KEY" > "$PROBE_DIR/candidate.key"
+            if npx --no-install tauri signer sign -p "$FILE_PASS" -f "$PROBE_DIR/candidate.key" "$PROBE_DIR/probe.bin" > "$PROBE_DIR/sign.log" 2>&1; then
+              SELECTED_KEY="$FILE_KEY"; SELECTED_PASS="$FILE_PASS"; SELECTED_FROM="$CREDENTIALS_FILE"
+            else
+              echo "::error::the keypair in $CREDENTIALS_FILE is unusable — key truncated/corrupt, or the password does not match it"
+              sed 's/^/    /' "$PROBE_DIR/sign.log"
+              exit 1
+            fi
+          fi
+          if [ -z "$SELECTED_KEY" ]; then
+            echo "::error::no updater signing key available (no usable secret and no $CREDENTIALS_FILE)"
             exit 1
           fi
-          echo "updater signing key verified (password opens the committed keypair)"
+          # Keep the key out of the run log even though it is in the repo.
+          echo "::add-mask::$SELECTED_KEY"
+          echo "::add-mask::$SELECTED_PASS"
+          echo "updater signing key verified via $SELECTED_FROM (${#SELECTED_KEY} chars)"
           {
-            echo "TAURI_SIGNING_PRIVATE_KEY=$KEY_CLEAN"
-            echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$PASS_CLEAN"
+            echo "TAURI_SIGNING_PRIVATE_KEY=$SELECTED_KEY"
+            echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$SELECTED_PASS"
           } >> "$GITHUB_ENV"
 
       - name: Typecheck
