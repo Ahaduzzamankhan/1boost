@@ -3,8 +3,9 @@
 # Triggers on a version tag push (e.g. `v1.2.0`) or manually. Verifies the tag
 # matches package.json AND tauri.conf.json, runs Rust + TS tests, builds the
 # signed NSIS installer via tauri-action, generates the updater manifest
-# (latest.json), attaches installer + signature + manifest to the GitHub
-# Release, and publishes it with the changelog.
+# (latest.json), builds the signed binary delta patch that makes the update
+# cheap, attaches installer + signatures + manifests to the GitHub Release, and
+# publishes it with the changelog.
 
 name: Release
 
@@ -226,6 +227,74 @@ jobs:
           EOF
           gh release upload "$TAG" latest.json --clobber
 
+      # Delta updates (primary updater path, full update is the fallback).
+      #
+      # An install that has the previous release's updater payload cached can
+      # rebuild this release's payload from a patch instead of downloading it
+      # again. The patch is generated against the newest previously published
+      # stable release, signed with the same release key, and named so the
+      # client can derive its URL from the payload URL in latest.json.
+      #
+      # Nothing here is load-bearing for the release: the client falls back to
+      # the full payload whenever the patch is absent or fails verification, so
+      # a delta problem degrades the download size and nothing else.
+      - name: Generate and sign the delta patch
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          TAG="${GITHUB_REF_NAME}"
+          ASSETS=$(gh release view "$TAG" --json assets --jq '.assets[].name')
+
+          # This release is still a draft at this point, so the newest
+          # published stable release is the one installs are actually sitting on.
+          BASE_TAG=$(gh release list --limit 20 --exclude-drafts --exclude-pre-releases \
+            --json tagName --jq '.[].tagName' | grep -v "^${TAG}$" | head -1)
+          if [ -z "$BASE_TAG" ]; then
+            echo "::notice::no earlier published release to build a delta from; the full updater path will be used"
+            exit 0
+          fi
+          BASE_VERSION="${BASE_TAG#v}"
+          echo "building a delta from $BASE_TAG to $TAG"
+
+          rm -rf basetmp targettmp
+          mkdir -p basetmp targettmp
+          if ! gh release download "$BASE_TAG" --pattern "*_x64-setup.nsis.zip" --dir basetmp; then
+            echo "::notice::$BASE_TAG has no updater payload to patch against; skipping the delta"
+            exit 0
+          fi
+          if ! gh release download "$TAG" --pattern "*_x64-setup.nsis.zip" --dir targettmp; then
+            echo "::error::this release's updater payload is missing"
+            exit 1
+          fi
+          BASE_FILE=$(ls basetmp/*.nsis.zip | head -1)
+          TARGET_FILE=$(ls targettmp/*.nsis.zip | head -1)
+
+          # Exit 2 means the patch would not be smaller than the payload, which
+          # is not worth shipping; anything else is a warning, never a failure.
+          node scripts/gen-delta.mjs "$BASE_FILE" "$TARGET_FILE" raw.1bdelta
+          STATUS=$?
+          if [ "$STATUS" -ne 0 ]; then
+            echo "::warning::delta generation failed (exit $STATUS); releases keep using the full update"
+            exit 0
+          fi
+
+          # Sign with the key already loaded and verified earlier in this run.
+          printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" > "$RUNNER_TEMP/updater.key"
+          if ! npx --no-install tauri signer sign -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" \
+              -f "$RUNNER_TEMP/updater.key" raw.1bdelta; then
+            echo "::warning::could not sign the delta; releasing without it"
+            exit 0
+          fi
+
+          ASSET="1Boost_${VERSION}_x64-setup.from-${BASE_VERSION}.1bdelta"
+          mv raw.1bdelta "$ASSET"
+          gh release upload "$TAG" "$ASSET" "$ASSET.sig" --clobber
+          echo "published ${ASSET} ($(wc -c < "$ASSET") bytes) plus its signature"
+
       # Migration shim: v1.1.x installs still run Electron and update via
       # electron-updater, which reads latest.yml from the newest published
       # release. Ship it alongside latest.json so existing users are pulled
@@ -261,6 +330,10 @@ jobs:
           echo "$ASSETS" | grep -q -- "_x64-setup\.nsis\.zip$" || { echo '::error::updater payload missing'; exit 1; }
           echo "$ASSETS" | grep -q '^latest\.json$' || { echo '::error::latest.json missing'; exit 1; }
           echo "$ASSETS" | grep -q '^latest\.yml$' || { echo '::error::latest.yml missing'; exit 1; }
+          # A delta is only ever offered together with its signature.
+          if echo "$ASSETS" | grep -q '\.1bdelta$'; then
+            echo "$ASSETS" | grep -q '\.1bdelta\.sig$' || { echo '::error::delta patch is not signed'; exit 1; }
+          fi
           # Set the body from the rendered file, then prove it took. The
           # Tauri migration lost this step and passed the *filename* to
           # tauri-action's literal `releaseBody`, which published the text

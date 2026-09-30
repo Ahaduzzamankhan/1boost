@@ -4,6 +4,38 @@ All notable changes to 1Boost are documented here. The latest release's
 section is injected into the GitHub Release body by CI
 (`scripts/release-notes.mjs`).
 
+## [Unreleased]
+
+### Added
+
+- **Delta updates are now the primary updater** — a release publishes a signed
+  `.1bdelta` patch next to its updater payload, and an install that already
+  has the previous payload on disk rebuilds the new one locally. A typical
+  update drops from ~2 MB to a few KB. The patch is matched with a rolling
+  window so an insertion anywhere in the artifact does not break alignment,
+  which is what keeps the patch small for binaries that only differ in a few
+  places.
+- **Rollback** — Settings can reinstall the previous version from the payload
+  1Boost already downloaded and hash-verified.
+
+### Security
+
+- A patch is only applied after its minisign signature verifies against the
+  same release key the full artifact uses, the cached base matches the SHA-256
+  recorded in the patch header, and the rebuilt artifact matches the target
+  SHA-256. Anything else discards the patch and falls back to the full update.
+- The cached payload keeps a sidecar hash and is refused if its bytes no longer
+  match, and version strings from the release feed are validated before they are
+  used as file names.
+
+### Notes
+
+- The first update an install takes is still a full download: the NSIS
+  installer leaves no copy of the updater payload behind, so there is nothing to
+  patch against until 1Boost has cached one itself. From the second update on,
+  the delta path is used. Every failure mode falls back to the full update, so
+  the worst case is the previous download size.
+
 ## [1.3.1] - 2026-09-30
 
 ### Fixed

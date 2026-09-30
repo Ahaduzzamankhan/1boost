@@ -175,6 +175,7 @@ function createBrowserHarnessBridge(): Bridge {
       checkedAt: Date.now(),
     }),
     installUpdate: async () => false,
+    rollbackUpdate: async () => ({ ok: false, error: 'updates are disabled in this build' }),
     onUpdateState: () => () => undefined,
     setPref: async (key, value) => {
       ;(prefs as unknown as Record<string, unknown>)[key] = value
@@ -308,6 +309,8 @@ function createTauriBridge(): Bridge {
     getUpdateState: () => invoke('get_update_state') as Promise<Awaited<ReturnType<Bridge['getUpdateState']>>>,
     checkForUpdates: () => invoke('check_for_updates') as Promise<Awaited<ReturnType<Bridge['checkForUpdates']>>>,
     installUpdate: () => invoke('install_update') as Promise<boolean>,
+    rollbackUpdate: () =>
+      invoke('rollback_update') as Promise<{ ok: boolean; version?: string; error?: string }>,
     onUpdateState: (cb) => sub('oneboost://update-state', cb),
     setPref: (key, value) =>
       invoke('set_pref', { key, value }) as Promise<Prefs>,

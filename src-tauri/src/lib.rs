@@ -9,10 +9,12 @@
 mod aggregator;
 mod apps;
 mod clipboard;
+mod delta;
 mod files;
 mod icons;
 mod model;
 mod monitor;
+mod payload;
 mod settings;
 mod storage;
 mod tracker;
@@ -805,6 +807,34 @@ async fn install_update(app: AppHandle) -> bool {
     updater::install_update(&app).await
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RollbackResult {
+    ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[tauri::command]
+async fn rollback_update(app: AppHandle) -> RollbackResult {
+    match updater::rollback_update(app).await {
+        // None means there is no older payload cached, which is not an error:
+        // the app simply has nothing to roll back to.
+        Ok(version) => RollbackResult {
+            ok: true,
+            version,
+            error: None,
+        },
+        Err(e) => RollbackResult {
+            ok: false,
+            version: None,
+            error: Some(e),
+        },
+    }
+}
+
 // ---------------------------------------------------------------------------
 
 // Monitor subscribe/unsubscribe (renderer pushes are event-based; the run
@@ -946,6 +976,7 @@ pub fn run() {
             get_update_state,
             check_for_updates,
             install_update,
+            rollback_update,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();

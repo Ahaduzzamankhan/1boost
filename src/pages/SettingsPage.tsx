@@ -78,6 +78,8 @@ export default function SettingsPage({
   const [repairing, setRepairing] = useState(false)
   const [update, setUpdate] = useState<UpdateState | null>(null)
   const [checking, setChecking] = useState(false)
+  const [rollingBack, setRollingBack] = useState(false)
+  const [rollbackNote, setRollbackNote] = useState<string | null>(null)
 
   const refreshLaunch = useCallback(async () => {
     try {
@@ -124,6 +126,21 @@ export default function SettingsPage({
       setUpdate(s)
     } finally {
       setChecking(false)
+    }
+  }, [])
+
+  const runRollback = useCallback(async () => {
+    setRollingBack(true)
+    setRollbackNote(null)
+    try {
+      const res = await bridge.rollbackUpdate()
+      if (res.error) setRollbackNote(`Rollback failed: ${res.error}`)
+      else if (res.version) setRollbackNote(`Reinstalling ${res.version}…`)
+      else setRollbackNote('No older version is cached on this machine yet.')
+    } catch {
+      setRollbackNote('Rollback failed.')
+    } finally {
+      setRollingBack(false)
     }
   }, [])
 
@@ -396,7 +413,13 @@ export default function SettingsPage({
                   : update?.status === 'downloading'
                     ? `Downloading ${update.availableVersion ?? 'update'}… ${update.progress ?? 0}%`
                     : update?.status === 'ready'
-                      ? `Version ${update.availableVersion ?? ''} is ready to install.`
+                      ? `Version ${update.availableVersion ?? ''} is ready to install${
+                          update.mode === 'delta'
+                            ? ' — rebuilt from a signed patch, no full download'
+                            : update.mode === 'full'
+                              ? ' — downloaded in full'
+                              : ''
+                        }.`
                       : update?.status === 'error'
                         ? `Update check failed: ${update.error ?? 'unknown error'}`
                         : 'You are on the latest version.'}
@@ -433,6 +456,24 @@ export default function SettingsPage({
               </span>
             ) : null}
           </div>
+          <div className="setting-row">
+            <div className="setting-info">
+              <div className="setting-title">Roll back</div>
+              <div className="setting-desc">
+                Reinstall the last version 1Boost downloaded, from the copy it kept on disk. Useful if a new
+                release misbehaves; the artifact is the same signed one the updater verified.
+              </div>
+            </div>
+            <button className="btn btn-secondary" onClick={() => void runRollback()} disabled={rollingBack}>
+              {rollingBack ? <RefreshCw size={15} className="spin" /> : <RotateCcw size={15} />}
+              {rollingBack ? 'Rolling back…' : 'Roll back'}
+            </button>
+          </div>
+          {rollbackNote ? (
+            <div className="setting-desc" style={{ paddingTop: 4 }}>
+              {rollbackNote}
+            </div>
+          ) : null}
         </div>
       </section>
 

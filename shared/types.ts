@@ -289,6 +289,11 @@ export interface UpdateState {
   error?: string | null
   /** Epoch ms of the last completed check. */
   checkedAt?: number
+  /**
+   * Which updater path produced this update: 'delta' when the new artifact was
+   * rebuilt locally from a patch, 'full' when it was downloaded whole.
+   */
+  mode?: 'delta' | 'full' | null
 }
 
 export interface Bridge {
@@ -316,6 +321,8 @@ export interface Bridge {
   getUpdateState: () => Promise<UpdateState>
   checkForUpdates: () => Promise<UpdateState>
   installUpdate: () => Promise<boolean>
+  /** Reinstall the newest cached payload older than this build, if any. */
+  rollbackUpdate: () => Promise<{ ok: boolean; version?: string; error?: string }>
   onUpdateState: (cb: (s: UpdateState) => void) => () => void
   setPref: (key: string, value: string | number | boolean) => Promise<Prefs>
   /** Renderer reports the current theme's window class (glass = transparent). */
