@@ -269,8 +269,12 @@ jobs:
             echo "::error::this release's updater payload is missing"
             exit 1
           fi
-          BASE_FILE=$(ls basetmp/*.nsis.zip | head -1)
-          TARGET_FILE=$(ls targettmp/*.nsis.zip | head -1)
+          BASE_FILE=$(ls basetmp/*.nsis.zip 2>/dev/null | head -1)
+          TARGET_FILE=$(ls targettmp/*.nsis.zip 2>/dev/null | head -1)
+          if [ -z "$BASE_FILE" ] || [ -z "$TARGET_FILE" ]; then
+            echo "::warning::could not resolve the payload files; skipping the delta"
+            exit 0
+          fi
 
           # Exit 2 means the patch would not be smaller than the payload, which
           # is not worth shipping; anything else is a warning, never a failure.

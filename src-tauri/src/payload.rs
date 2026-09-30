@@ -114,6 +114,19 @@ fn prune(dir: &Path) {
         let _ = fs::remove_file(&path);
         let _ = fs::remove_file(path.with_extension("payload.sha256"));
     }
+    // A crash between writing the temporary file and renaming it leaves a
+    // partial artifact behind; it is never read, so drop it here.
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            if entry
+                .path()
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("tmp"))
+            {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
+    }
 }
 
 /// Stores a verified payload plus the hash it must keep matching, writing
@@ -237,9 +250,12 @@ pub async fn fetch_delta(
     if !is_safe_version(base_version) || !is_safe_version(target_version) {
         return Err("unsafe version string".to_string());
     }
-    let (dir, _) = payload_url
+    let (dir, file) = payload_url
         .rsplit_once('/')
         .ok_or_else(|| "unexpected payload url".to_string())?;
+    if dir.is_empty() || file.is_empty() {
+        return Err("unexpected payload url".to_string());
+    }
     let url = format!("{dir}/{}", delta_asset_name(base_version, target_version));
     let signature_url = format!("{url}.sig");
 
