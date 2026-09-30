@@ -652,8 +652,8 @@ mod tests {
         let hits = v.search("rel", &apps);
         assert_eq!(hits[0].kind, "note");
         assert!(hits.iter().any(|h| h.kind == "app" && h.title == "Brave"));
-        assert!(v.search("zzzz", apps).is_empty());
-        assert!(v.search("   ", apps).is_empty());
+        assert!(v.search("zzzz", &apps).is_empty());
+        assert!(v.search("   ", &apps).is_empty());
     }
 
     #[test]
