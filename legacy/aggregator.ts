@@ -9,7 +9,7 @@ import type {
   Session,
   TrendPoint,
   UsageData,
-} from '../../shared/types'
+} from '../shared/types'
 
 // ---------------------------------------------------------------------------
 // Day keys (local time)
@@ -413,5 +413,120 @@ export function clampPrefs(p: Partial<Prefs> | null | undefined, defaults: Prefs
     out.keepHistoryDays = Math.min(3650, Math.max(7, Math.round(p.keepHistoryDays)))
   }
   out.showTray = typeof p.showTray === 'boolean' ? p.showTray : out.showTray
+  return out
+}
+
+// ---------------------------------------------------------------------------
+// Test/data-shape constants (previously in storage.ts)
+// ---------------------------------------------------------------------------
+
+/** Defaults mirroring the shipped Electron settings.json so old installs and
+ * the Rust backend agree on the initial preference set. */
+export const DEFAULT_PREFS: Prefs = {
+  theme: 'dark-glass',
+  accent: 'blue',
+  transparency: 0.4,
+  reducedMotion: false,
+  launchAtLogin: false,
+  startMinimized: false,
+  pauseTracking: false,
+  idleThresholdMin: 1,
+  keepHistoryDays: 365,
+  showTray: true,
+}
+
+const DATA_VERSION = 1
+
+/** Empty usage store (data-file shape version 1). */
+export function emptyUsage(): UsageData {
+  return {
+    version: DATA_VERSION,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    days: {},
+    sessions: [],
+    totals: { pcOnMs: 0, activeMs: 0, idleMs: 0, days: 0 },
+    pendingSession: null,
+    appNames: {},
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Data normalization (previously in storage.ts; needed by tests and by any
+// tooling that validates hand-edited data files)
+// ---------------------------------------------------------------------------
+
+function num(v: unknown): number {
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0
+}
+
+/** Normalize + validate a parsed UsageData to survive schema drift / hand edits. */
+export function normalizeUsageData(v: UsageData): UsageData {
+  const days: UsageData['days'] = {}
+  for (const [k, d] of Object.entries(v.days)) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(k) || !d || typeof d !== 'object') continue
+    days[k] = {
+      date: k,
+      pcOnMs: num(d.pcOnMs),
+      activeMs: num(d.activeMs),
+      idleMs: num(d.idleMs),
+      screenOnMs: num(d.screenOnMs),
+      firstMs: num(d.firstMs),
+      lastMs: num(d.lastMs),
+      batteryMs: num(d.batteryMs),
+      acMs: num(d.acMs),
+      focusMs: num((d as { focusMs?: unknown }).focusMs),
+      apps: sanitizeApps(d.apps),
+    }
+  }
+  const sessions = Array.isArray(v.sessions)
+    ? v.sessions.filter(
+        (s: unknown): s is UsageData['sessions'][number] =>
+          !!s && typeof s === 'object' && typeof (s as UsageData['sessions'][number]).startMs === 'number',
+      )
+    : []
+  return {
+    version: DATA_VERSION,
+    createdAt: num(v.createdAt) || Date.now(),
+    updatedAt: num(v.updatedAt) || Date.now(),
+    days,
+    sessions,
+    totals: { pcOnMs: 0, activeMs: 0, idleMs: 0, days: 0 },
+    pendingSession: sanitizePending(v.pendingSession),
+    appNames: sanitizeAppNames(v.appNames),
+  }
+}
+
+function sanitizeApps(apps: unknown): Record<string, number> {
+  const out: Record<string, number> = {}
+  if (apps && typeof apps === 'object') {
+    for (const [k, v] of Object.entries(apps as Record<string, unknown>)) {
+      if (typeof k === 'string' && k.length > 0 && k.length <= 64) out[k] = num(v)
+    }
+  }
+  return out
+}
+
+function sanitizePending(p: unknown): UsageData['pendingSession'] {
+  if (!p || typeof p !== 'object') return null
+  const q = p as { startMs?: unknown; activeMs?: unknown; onMs?: unknown; idleMs?: unknown }
+  if (typeof q.startMs !== 'number') return null
+  return {
+    startMs: q.startMs,
+    activeMs: num(q.activeMs),
+    onMs: num(q.onMs),
+    idleMs: num(q.idleMs),
+  }
+}
+
+function sanitizeAppNames(v: unknown): Record<string, string> {
+  const out: Record<string, string> = {}
+  if (v && typeof v === 'object') {
+    for (const [k, n] of Object.entries(v as Record<string, unknown>)) {
+      if (typeof k === 'string' && k.length > 0 && k.length <= 64 && typeof n === 'string' && n.length <= 64) {
+        out[k] = n
+      }
+    }
+  }
   return out
 }

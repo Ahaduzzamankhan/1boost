@@ -7,90 +7,26 @@
   "license": "MIT",
   "private": true,
   "type": "module",
-  "main": "dist-electron/main/index.cjs",
-  "build": {
-    "appId": "com.ahaduzzamankhan.oneboost",
-    "productName": "1Boost",
-    "directories": {
-      "output": "release/${version}"
-    },
-    "asarUnpack": [
-      "node_modules/koffi/**"
-    ],
-    "npmRebuild": false,
-    "files": [
-      "dist/**/*",
-      "dist-electron/**/*",
-      "package.json"
-    ],
-    "extraResources": [
-      {
-        "from": "resources/native",
-        "to": "native",
-        "filter": [
-          "**/*.dll"
-        ]
-      },
-      {
-        "from": "resources/icons",
-        "to": "icons",
-        "filter": [
-          "*.ico"
-        ]
-      }
-    ],
-    "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        }
-      ],
-      "icon": "resources/icons/icon.ico",
-      "artifactName": "1Boost-Setup-${version}.${ext}"
-    },
-    "nsis": {
-      "oneClick": false,
-      "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "shortcutName": "1Boost",
-      "differentialPackage": true
-    },
-    "publish": {
-      "provider": "github",
-      "owner": "Ahaduzzamankhan",
-      "repo": "1boost"
-    }
-  },
   "scripts": {
     "native:build": "cargo build --release --manifest-path native/Cargo.toml",
     "native:build:dev": "cargo build --manifest-path native/Cargo.toml",
+    "rust:test": "cargo test --release --manifest-path native/Cargo.toml",
     "build:renderer": "node scripts/build.mjs renderer",
     "build": "npm run typecheck && node scripts/build.mjs renderer",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "rust:test": "cargo test --release --manifest-path native/Cargo.toml",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "icons:tauri": "node scripts/make-tauri-icons.js"
   },
-  "dependencies": {
-    "electron-updater": "^6.8.9",
-    "koffi": "^3.3.2"
-  },
+  "dependencies": {},
   "devDependencies": {
     "@tauri-apps/api": "^2.12.0",
     "@tauri-apps/cli": "^2.12.0",
     "@types/node": "^22.10.0",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
-    "electron": "^37.0.0",
-    "electron-builder": "^25.1.0",
     "esbuild": "^0.25.0",
     "lucide-react": "^0.525.0",
     "react": "^19.1.0",

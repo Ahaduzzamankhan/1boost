@@ -19,5 +19,5 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["src", "electron", "tests", "scripts", "shared"]
+  "include": ["src", "legacy", "tests", "scripts", "shared"]
 }

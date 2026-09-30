@@ -20,6 +20,21 @@ locally on your device.
   with real-time graphs, temperatures where the hardware exposes them, and
   per-drive storage bars.
 
+### New in v1.2.0
+
+- **Tauri 2** — the app shell migrated from Electron to Tauri 2 with a much
+  smaller footprint: the WebView2-based binary is a fraction of the old
+  Electron package, starts faster, and keeps the exact same UI. The Rust
+  tracking/monitoring layer is now linked directly into the backend (no more
+  separate DLL sidecar + FFI bridge).
+- **Seamless data migration** — data paths, file formats, schema and the
+  registry Run-key entry are byte-compatible with the Electron build, so
+  installing the Tauri version keeps your history and settings in place.
+- **Signed auto-updates** via the Tauri updater on GitHub Releases
+  (`latest.json` + minisign signatures).
+- Same feature set otherwise: dashboard, apps, statistics, history, monitor,
+  themes, tray, launch-at-login, and all v1.1.6 fixes.
+
 ### New in v1.1.4
 
 - **Monitor fixed** — opening the Monitor page now actually starts the native
@@ -103,8 +118,8 @@ locally on your device.
 
 ## How tracking works
 
-1Boost pairs a tiny **Rust native layer** (`electron/native`) with an Electron
-main-process orchestrator:
+1Boost pairs a tiny **Rust native layer** (`native/`) with a **Tauri 2**
+backend (`src-tauri/`):
 
 - A native event-pump thread receives **Windows power broadcasts** (sleep,
   resume), **power-setting notifications** (display on/off), and **session
@@ -117,42 +132,48 @@ main-process orchestrator:
   unaccounted gaps are never counted as usage.
 
 Data lives in `%APPDATA%/1Boost/usage-data.json` (atomic writes, rolling
-backups, automatic corruption recovery). Nothing ever leaves your machine.
+backups, automatic corruption recovery) — the same location and format the
+original Electron build used, so existing installs keep their history and
+preferences when upgrading to the Tauri version. Nothing ever leaves your
+machine.
 
 ## Development
 
 ```bash
-npm install            # dependencies
-npm run native:build   # compile the Rust tracking layer (requires cargo)
-npm run build          # typecheck + build main, preload and renderer
-npm start              # launch the app
-npm test               # unit tests (aggregation, formatting, sessions)
+npm install                 # dependencies (Tauri CLI + renderer toolchain)
+npm run native:build        # compile the Rust tracking layer (requires cargo)
+npm run build:renderer      # build the React UI into dist/
+npm run tauri:dev           # run the desktop app in dev mode
+npm run typecheck && npm test   # typecheck + unit tests (aggregation, formatting, sessions)
 ```
 
-Rebuild the native layer whenever `electron/native/src/lib.rs` changes. The
-renderer can be rebuilt alone with `npm run build:renderer` — restart the app
-to pick it up.
+The packaged build is `npm run tauri:build` (Windows NSIS x64 installer,
+signed update artifacts when `TAURI_SIGNING_PRIVATE_KEY` is set). Regenerate
+Tauri icons after changing artwork with `npm run icons:tauri`.
 
-### Utilities
-
-- `node scripts/make-icons.js` — regenerate `resources/icons/*.ico`
-- `node scripts/cdp.mjs '<js>' [--console]` — evaluate JS in the running app
-  (start it first with `npx electron . --remote-debugging-port=9222`)
+`legacy/aggregator.ts` keeps the original TypeScript aggregation logic and
+data-shape constants, used by the unit tests and as a reference for the Rust
+port in `src-tauri/`.
 
 ## Releasing
 
-Releases are automated with GitHub Actions (`.github/workflows/release.yml`):
+Releases are automated with GitHub Actions (`.github/workflows/release.yml`)
+using [tauri-action](https://github.com/tauri-apps/tauri-action):
 
-1. Bump `version` in `package.json`.
+1. Bump `version` in `package.json` **and** `src-tauri/tauri.conf.json`.
 2. Commit and tag: `git tag v1.2.0 && git push origin v1.2.0`.
-3. The workflow runs TS + Rust tests, builds the Rust layer, packs the NSIS
-   installer and publishes a GitHub Release with `1Boost-Setup-<version>.exe`.
+3. The workflow builds the Rust layer + NSIS x64 installer, signs the update
+   bundle with `TAURI_SIGNING_PRIVATE_KEY`, and publishes a GitHub Release
+   with `1Boost-Setup-<version>-x64-setup.exe` (+ `.sig`) and a generated
+   `latest.json`.
 
-Installed apps auto-update from the same Releases feed via electron-updater
-(publishes `latest.yml` + blockmap alongside the installer). Release drafts are
-created by CI and published automatically after the run.
+Installed apps auto-update from the same Releases feed via the Tauri updater
+(`plugins.updater` endpoint in `tauri.conf.json`). Secrets required by CI:
+`TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`; the
+matching minisign **public** key must be set in `tauri.conf.json` →
+`plugins.updater.pubkey`.
 
-The tag must match the `package.json` version (the workflow verifies it).
+The tag must match the `tauri.conf.json` version (the workflow verifies it).
 
 ## Privacy
 

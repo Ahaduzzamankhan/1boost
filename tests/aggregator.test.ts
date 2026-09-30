@@ -7,15 +7,15 @@ import {
   dailyTrend,
   dayKey,
   emptyDay,
+  emptyUsage,
   ensureDay,
   openSession,
   parseDayKey,
   topAppsForDay,
   trimToRetention,
-} from '../electron/main/aggregator'
-import { emptyUsage } from '../electron/main/storage'
+} from '../legacy/aggregator'
 import { formatDuration, formatDurationShort, formatPercent } from '../src/lib/format'
-import { DEFAULT_PREFS } from '../electron/main/storage'
+import { DEFAULT_PREFS } from '../legacy/aggregator'
 
 describe('dayKey', () => {
   it('formats local day keys', () => {
@@ -233,7 +233,7 @@ describe('usage data normalization', () => {
       pendingSession: null,
       appNames: {},
     }
-    const { normalizeUsageData } = await import('../electron/main/storage')
+    const { normalizeUsageData } = await import('../legacy/aggregator')
     const normalized = normalizeUsageData(legacy as never)
     expect(normalized.days['2026-09-28'].focusMs).toBe(0)
     expect(normalized.days['2026-09-28'].activeMs).toBe(2_400_000)
