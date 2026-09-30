@@ -649,20 +649,30 @@ mod tests {
         v.save_note(Note { title: "Rust release checklist".into(), body: "sign the key".into(), ..Default::default() });
         v.save_task(Task { title: "Reply to Sam".into(), ..Default::default() });
         let apps = vec![("brave".to_string(), "Brave".to_string(), 3_600_000)];
+        // Every kind is reachable — the point of universal search.
         let hits = v.search("rel", &apps);
-        assert_eq!(hits[0].kind, "note");
-        assert!(hits.iter().any(|h| h.kind == "app" && h.title == "Brave"));
+        assert!(hits.iter().any(|h| h.kind == "note"), "notes are searchable");
+        assert!(hits.iter().any(|h| h.kind == "task"), "tasks are searchable");
+        let app_hits = v.search("brave", &apps);
+        assert!(app_hits.iter().any(|h| h.kind == "app" && h.title == "Brave"));
+        // A unique phrase puts its note on top.
+        let exact = v.search("checklist", &apps);
+        assert_eq!(exact[0].kind, "note");
         assert!(v.search("zzzz", &apps).is_empty());
         assert!(v.search("   ", &apps).is_empty());
     }
 
     #[test]
-    fn fuzzy_prefers_prefix_and_word_matches() {
+    fn fuzzy_prefers_prefix_matches() {
         let prefix = fuzzy_score("Brave", "bra").unwrap();
-        let middle = fuzzy_score("My Brave Browser", "bra").unwrap();
-        let scattered = fuzzy_score("Brave", "bve").unwrap_or(i64::MIN);
-        assert!(prefix > middle, "prefix beats mid-string");
-        assert!(middle > scattered || scattered == i64::MIN);
+        let mid_string = fuzzy_score("My Brave Browser", "bra").unwrap();
+        assert!(prefix > mid_string, "a prefix match must beat a mid-string one");
+        // Contiguous letters outrank the same letters spread out.
+        let contiguous = fuzzy_score("brave", "bra").unwrap();
+        let gapped = fuzzy_score("b-r-a-v-e", "bra").unwrap_or(i64::MIN);
+        assert!(contiguous > gapped);
         assert!(fuzzy_score("abc", "abcd").is_none(), "needle longer than haystack");
+        assert!(fuzzy_score("abc", "xyz").is_none(), "letters that do not appear");
+        assert_eq!(fuzzy_score("anything", ""), Some(1), "empty query matches everything");
     }
 }
