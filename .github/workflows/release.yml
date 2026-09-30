@@ -162,6 +162,14 @@ jobs:
             VERSION=$(node -p "require('./package.json').version")
           fi
           node scripts/release-notes.mjs "$VERSION" release-notes.md
+          # tauri-action's `releaseBody` input is a literal string, not a path,
+          # so the rendered notes have to be handed to it via the environment.
+          {
+            echo "RELEASE_BODY<<1BOOST_EOF_NOTES"
+            cat release-notes.md
+            echo ""
+            echo "1BOOST_EOF_NOTES"
+          } >> "$GITHUB_ENV"
 
       - name: Build signed Tauri NSIS release
         uses: tauri-apps/tauri-action@v0
@@ -175,7 +183,7 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: '1Boost ${{ github.ref_name }}'
           releaseDraft: true
-          releaseBody: release-notes.md
+          releaseBody: ${{ env.RELEASE_BODY }}
           prerelease: false
           args: --target x86_64-pc-windows-msvc
 
@@ -253,11 +261,21 @@ jobs:
           echo "$ASSETS" | grep -q -- "_x64-setup\.nsis\.zip$" || { echo '::error::updater payload missing'; exit 1; }
           echo "$ASSETS" | grep -q '^latest\.json$' || { echo '::error::latest.json missing'; exit 1; }
           echo "$ASSETS" | grep -q '^latest\.yml$' || { echo '::error::latest.yml missing'; exit 1; }
+          # Set the body from the rendered file, then prove it took. The
+          # Tauri migration lost this step and passed the *filename* to
+          # tauri-action's literal `releaseBody`, which published the text
+          # "release-notes.md" as the body of 1.2.1 and 1.3.0.
           if [ "$PRERELEASE" = "true" ]; then
-            gh release edit "$TAG" --draft=false --prerelease --latest=false
+            gh release edit "$TAG" --draft=false --prerelease --latest=false --notes-file release-notes.md
           else
-            gh release edit "$TAG" --draft=false --prerelease=false --latest
+            gh release edit "$TAG" --draft=false --prerelease=false --latest --notes-file release-notes.md
           fi
+          BODY=$(gh release view "$TAG" --json body --jq '.body')
+          if [ "$BODY" = "release-notes.md" ] || [ -z "$BODY" ]; then
+            echo "::error::release body was not set from release-notes.md"
+            exit 1
+          fi
+          echo "release body set ($(printf '%s' "$BODY" | wc -l) lines)"
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
