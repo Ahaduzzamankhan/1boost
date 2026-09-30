@@ -668,13 +668,13 @@ fn tag_index(app: AppHandle) -> std::collections::BTreeMap<String, usize> {
 #[tauri::command]
 fn search_everything(app: AppHandle, query: String) -> Vec<vault::SearchHit> {
     let st = app.state::<AppState>();
-    let apps = st
+    let apps: Vec<(String, String, u64)> = st
         .tracker
         .apps_list()
         .into_iter()
         .map(|a| (a.key, a.name, a.ms))
         .collect();
-    st.vault.search(&query, apps)
+    st.vault.search(&query, &apps)
 }
 
 /// What quick capture decided the line was, so the renderer can confirm.

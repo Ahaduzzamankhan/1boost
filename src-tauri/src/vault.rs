@@ -471,7 +471,7 @@ fn fuzzy_score(haystack: &str, needle: &str) -> Option<i64> {
 
 impl Vault {
     /// Universal search across notes, tasks and the usage history.
-    pub fn search(&self, query: &str, apps: Vec<(String, String, u64)>) -> Vec<SearchHit> {
+    pub fn search(&self, query: &str, apps: &[(String, String, u64)]) -> Vec<SearchHit> {
         let q = query.trim();
         if q.is_empty() {
             return Vec::new();
@@ -520,7 +520,7 @@ impl Vault {
             }
         }
 
-        for (key, name, ms) in apps {
+        for (key, name, ms) in apps.iter() {
             if let Some(score) = fuzzy_score(&name, q).or_else(|| fuzzy_score(&key, q)) {
                 hits.push(SearchHit {
                     kind: "app".into(),
@@ -649,7 +649,7 @@ mod tests {
         v.save_note(Note { title: "Rust release checklist".into(), body: "sign the key".into(), ..Default::default() });
         v.save_task(Task { title: "Reply to Sam".into(), ..Default::default() });
         let apps = vec![("brave".to_string(), "Brave".to_string(), 3_600_000)];
-        let hits = v.search("rel", apps.clone());
+        let hits = v.search("rel", &apps);
         assert_eq!(hits[0].kind, "note");
         assert!(hits.iter().any(|h| h.kind == "app" && h.title == "Brave"));
         assert!(v.search("zzzz", apps).is_empty());
