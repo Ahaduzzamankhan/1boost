@@ -58,9 +58,15 @@ const preloadOpts = {
 const rendererOpts = {
   ...common,
   entryPoints: [rendererEntry],
-  outfile: join(root, 'dist', 'index.js'),
+  // ESM + splitting so React.lazy modules load on demand: opening 1Boost
+  // only pays for the shell, not for every tool in the app.
+  outdir: join(root, 'dist'),
   platform: 'browser',
-  format: 'iife',
+  format: 'esm',
+  splitting: true,
+  chunkNames: 'chunks/[name]-[hash]',
+  // index.html loads ./index.js regardless of the entry file name.
+  entryNames: 'index',
   jsx: 'automatic',
   define,
   loader: { '.svg': 'dataurl' },
@@ -74,7 +80,10 @@ async function buildOne(name) {
     await esbuild.build(rendererOpts)
     if (!existsSync(join(root, 'dist'))) mkdirSync(join(root, 'dist'), { recursive: true })
     copyFileSync(rendererHtml, join(root, 'dist', 'index.html'))
-    copyFileSync(join(root, 'src', 'index.css'), join(root, 'dist', 'index.css'))
+    // Both stylesheets ship side by side; index.html links them in order.
+    for (const sheet of ['index.css', 'modules.css']) {
+      copyFileSync(join(root, 'src', sheet), join(root, 'dist', sheet))
+    }
   }
   console.log(`[build] ${name} done in ${Date.now() - t0}ms`)
 }

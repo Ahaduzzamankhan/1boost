@@ -8,6 +8,7 @@
 
 mod aggregator;
 mod apps;
+mod clipboard;
 mod icons;
 mod model;
 mod monitor;
@@ -16,6 +17,7 @@ mod storage;
 mod tracker;
 mod updater;
 mod util;
+mod vault;
 
 use model::*;
 use monitor::MonitorPayload;
@@ -31,6 +33,7 @@ use util::now_ms;
 pub struct AppState {
     pub tracker: Arc<SharedTracker>,
     pub monitor: monitor::Monitor,
+    pub vault: Arc<vault::Vault>,
     pub tray_handle: Mutex<Option<tauri::tray::TrayIcon>>,
     /// Handle of the tray "toggle" item, so its label can be updated without
     /// rebuilding the menu (TrayIcon has no menu accessor in Tauri 2).
@@ -575,6 +578,172 @@ fn notify_theme_class(app: AppHandle, _glass: bool) {
     apply_theme(&app);
 }
 
+// Productivity vault ---------------------------------------------------------
+
+#[tauri::command]
+fn notes_list(app: AppHandle) -> Vec<vault::Note> {
+    app.state::<AppState>().vault.notes()
+}
+
+#[tauri::command]
+fn note_save(app: AppHandle, note: vault::Note) -> vault::Note {
+    app.state::<AppState>().vault.save_note(note)
+}
+
+#[tauri::command]
+fn note_delete(app: AppHandle, id: String) -> bool {
+    app.state::<AppState>().vault.delete_note(&id)
+}
+
+#[tauri::command]
+fn tasks_list(app: AppHandle) -> Vec<vault::Task> {
+    app.state::<AppState>().vault.tasks()
+}
+
+#[tauri::command]
+fn task_save(app: AppHandle, task: vault::Task) -> vault::Task {
+    app.state::<AppState>().vault.save_task(task)
+}
+
+#[tauri::command]
+fn task_toggle(app: AppHandle, id: String) -> Option<vault::Task> {
+    app.state::<AppState>().vault.toggle_task(&id)
+}
+
+#[tauri::command]
+fn task_delete(app: AppHandle, id: String) -> bool {
+    app.state::<AppState>().vault.delete_task(&id)
+}
+
+#[tauri::command]
+fn tasks_clear_done(app: AppHandle) -> usize {
+    app.state::<AppState>().vault.clear_done_tasks()
+}
+
+#[tauri::command]
+fn clips_list(app: AppHandle) -> Vec<vault::Clip> {
+    app.state::<AppState>().vault.clips()
+}
+
+#[tauri::command]
+fn clip_pin(app: AppHandle, id: String) -> Option<vault::Clip> {
+    app.state::<AppState>().vault.toggle_clip_pin(&id)
+}
+
+#[tauri::command]
+fn clip_delete(app: AppHandle, id: String) -> bool {
+    app.state::<AppState>().vault.delete_clip(&id)
+}
+
+#[tauri::command]
+fn clips_clear(app: AppHandle) -> usize {
+    app.state::<AppState>().vault.clear_clips()
+}
+
+#[tauri::command]
+fn clip_paste(app: AppHandle, id: String) -> bool {
+    let v = &app.state::<AppState>().vault;
+    match v.clips().into_iter().find(|c| c.id == id) {
+        Some(c) => v.set_system_clipboard(&c.text),
+        None => false,
+    }
+}
+
+/// Capture the current clipboard into the history right now (the poller does
+/// this continuously; this is the manual "grab it" button).
+#[tauri::command]
+fn clip_capture(app: AppHandle) -> Option<vault::Clip> {
+    let v = &app.state::<AppState>().vault;
+    let text = clipboard::get_text()?;
+    v.record_clip(text)
+}
+
+#[tauri::command]
+fn tag_index(app: AppHandle) -> std::collections::BTreeMap<String, usize> {
+    let v = &app.state::<AppState>().vault;
+    vault::tag_index(&v.notes(), &v.tasks())
+}
+
+/// Universal search across notes, tasks and tracked apps.
+#[tauri::command]
+fn search_everything(app: AppHandle, query: String) -> Vec<vault::SearchHit> {
+    let st = app.state::<AppState>();
+    let apps = st
+        .tracker
+        .apps_list()
+        .into_iter()
+        .map(|a| (a.key, a.name, a.ms))
+        .collect();
+    st.vault.search(&query, apps)
+}
+
+/// What quick capture decided the line was, so the renderer can confirm.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CaptureResult {
+    kind: String,
+    title: String,
+    id: String,
+}
+
+#[tauri::command]
+fn quick_capture(app: AppHandle, input: String) -> Result<CaptureResult, String> {
+    let text = input.trim();
+    if text.is_empty() {
+        return Err("nothing to capture".into());
+    }
+    let (forced, rest) = match text.chars().next() {
+        Some('!') => (Some("task"), text[1..].trim()),
+        Some('>') => (Some("note"), text[1..].trim()),
+        _ => (None, text),
+    };
+    // "#tag words" -> tags, "content" -> body.
+    let mut tags = Vec::new();
+    let mut words: Vec<&str> = Vec::new();
+    for w in rest.split_whitespace() {
+        if let Some(tag) = w.strip_prefix('#') {
+            if !tag.is_empty() && tag.len() <= 32 && !tag.contains('/') && !tag.contains('\\') {
+                tags.push(tag.to_string());
+                continue;
+            }
+        }
+        words.push(w);
+    }
+    let content = words.join(" ");
+    if content.is_empty() {
+        return Err("nothing to capture".into());
+    }
+    let title: String = content.chars().take(72).collect();
+
+    let kind = forced.unwrap_or("note");
+    let v = &app.state::<AppState>().vault;
+    let result = if kind == "task" {
+        let t = v.save_task(vault::Task { title: content, tags, ..Default::default() });
+        CaptureResult { kind: "task".into(), title: t.title, id: t.id }
+    } else {
+        let n = v.save_note(vault::Note { title, body: String::new(), tags, ..Default::default() });
+        CaptureResult { kind: "note".into(), title: n.title, id: n.id }
+    };
+    Ok(result)
+}
+
+/// Background clipboard watcher: records new clipboard text into the history.
+/// Polling keeps this dependency-free and robust — a listener would need a
+/// message pump on a hidden window for no practical gain at this scale.
+fn clipboard_watch_loop(v: Arc<vault::Vault>, stop: Arc<std::sync::atomic::AtomicBool>) {
+    const POLL_MS: u64 = 900;
+    v.seed_clipboard();
+    while !stop.load(Ordering::Relaxed) {
+        std::thread::sleep(std::time::Duration::from_millis(POLL_MS));
+        if stop.load(Ordering::Relaxed) {
+            return;
+        }
+        if let Some(text) = clipboard::get_text() {
+            v.record_clip(text);
+        }
+    }
+}
+
 // Updates ---------------------------------------------------------------------
 
 #[tauri::command]
@@ -672,6 +841,7 @@ fn run_loop(app: AppHandle) {
 pub fn run() {
     let storage = storage::Storage::new();
     let tracker = Arc::new(SharedTracker::new(storage));
+    let vault = Arc::new(vault::Vault::new(storage::user_data_dir()));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -702,6 +872,23 @@ pub fn run() {
             monitor_unsubscribe,
             navigate,
             open_app_detail,
+            notes_list,
+            note_save,
+            note_delete,
+            tasks_list,
+            task_save,
+            task_toggle,
+            task_delete,
+            tasks_clear_done,
+            clips_list,
+            clip_pin,
+            clip_delete,
+            clips_clear,
+            clip_paste,
+            clip_capture,
+            tag_index,
+            search_everything,
+            quick_capture,
             minimize_window,
             toggle_maximize,
             close_window,
@@ -717,6 +904,7 @@ pub fn run() {
             app.manage(AppState {
                 tracker: tracker.clone(),
                 monitor: monitor::Monitor::new(),
+                vault: vault.clone(),
                 tray_handle: Mutex::new(None),
                 tray_toggle: Mutex::new(None),
                 quitting: AtomicBool::new(false),
@@ -758,6 +946,13 @@ pub fn run() {
             // Start the native tracking layer + background run loop.
             if !oneboost_native::api::start() {
                 log::warn!("[1boost] native tracking layer failed to start");
+            }
+            // Clipboard history watcher.
+            {
+                let v = vault.clone();
+                std::thread::spawn(move || {
+                    clipboard_watch_loop(v, Arc::new(std::sync::atomic::AtomicBool::new(false)))
+                });
             }
             let loop_handle = handle.clone();
             std::thread::spawn(move || run_loop(loop_handle));

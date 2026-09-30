@@ -224,6 +224,23 @@ function createBrowserHarnessBridge(): Bridge {
     getWeekdayAverages: async () => ({ buckets: [] }),
     getHistoryPage: async () => ({ items: [], hasMore: false }),
     openDataFolder: () => undefined,
+    notesList: async () => [],
+    noteSave: async (n) => n,
+    noteDelete: async () => true,
+    tasksList: async () => [],
+    taskSave: async (t) => t,
+    taskToggle: async () => null,
+    taskDelete: async () => true,
+    tasksClearDone: async () => 0,
+    clipsList: async () => [],
+    clipPin: async () => null,
+    clipDelete: async () => true,
+    clipsClear: async () => 0,
+    clipPaste: async () => false,
+    clipCapture: async () => null,
+    tagIndex: async () => ({}),
+    searchEverything: async () => [],
+    quickCapture: async (input) => ({ kind: 'note', title: input, id: '' }),
   }
 }
 
@@ -309,6 +326,25 @@ function createTauriBridge(): Bridge {
     getHistoryPage: (offset: number, limit: number) =>
       invoke('get_history_page', { offset, limit }) as Promise<Awaited<ReturnType<Bridge['getHistoryPage']>>>,
     openDataFolder: () => void invoke('open_data_folder'),
+    notesList: () => invoke('notes_list') as Promise<Awaited<ReturnType<Bridge['notesList']>>>,
+    noteSave: (note) => invoke('note_save', { note }) as Promise<Awaited<ReturnType<Bridge['noteSave']>>>,
+    noteDelete: (id) => invoke('note_delete', { id }) as Promise<boolean>,
+    tasksList: () => invoke('tasks_list') as Promise<Awaited<ReturnType<Bridge['tasksList']>>>,
+    taskSave: (task) => invoke('task_save', { task }) as Promise<Awaited<ReturnType<Bridge['taskSave']>>>,
+    taskToggle: (id) => invoke('task_toggle', { id }) as Promise<Awaited<ReturnType<Bridge['taskToggle']>>>,
+    taskDelete: (id) => invoke('task_delete', { id }) as Promise<boolean>,
+    tasksClearDone: () => invoke('tasks_clear_done') as Promise<number>,
+    clipsList: () => invoke('clips_list') as Promise<Awaited<ReturnType<Bridge['clipsList']>>>,
+    clipPin: (id) => invoke('clip_pin', { id }) as Promise<Awaited<ReturnType<Bridge['clipPin']>>>,
+    clipDelete: (id) => invoke('clip_delete', { id }) as Promise<boolean>,
+    clipsClear: () => invoke('clips_clear') as Promise<number>,
+    clipPaste: (id) => invoke('clip_paste', { id }) as Promise<boolean>,
+    clipCapture: () => invoke('clip_capture') as Promise<Awaited<ReturnType<Bridge['clipCapture']>>>,
+    tagIndex: () => invoke('tag_index') as Promise<Awaited<ReturnType<Bridge['tagIndex']>>>,
+    searchEverything: (query) =>
+      invoke('search_everything', { query }) as Promise<Awaited<ReturnType<Bridge['searchEverything']>>>,
+    quickCapture: (input) =>
+      invoke('quick_capture', { input }) as Promise<Awaited<ReturnType<Bridge['quickCapture']>>>,
   }
 }
 

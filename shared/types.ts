@@ -337,9 +337,89 @@ export interface Bridge {
   getWeekdayAverages: () => Promise<WeekdayAverages>
   getHistoryPage: (offset: number, limit: number) => Promise<HistoryPage>
   openDataFolder: () => void
+  // Productivity vault ---------------------------------------------------
+  notesList: () => Promise<Note[]>
+  noteSave: (note: Note) => Promise<Note>
+  noteDelete: (id: string) => Promise<boolean>
+  tasksList: () => Promise<Task[]>
+  taskSave: (task: Task) => Promise<Task>
+  taskToggle: (id: string) => Promise<Task | null>
+  taskDelete: (id: string) => Promise<boolean>
+  tasksClearDone: () => Promise<number>
+  clipsList: () => Promise<Clip[]>
+  clipPin: (id: string) => Promise<Clip | null>
+  clipDelete: (id: string) => Promise<boolean>
+  clipsClear: () => Promise<number>
+  clipPaste: (id: string) => Promise<boolean>
+  clipCapture: () => Promise<Clip | null>
+  tagIndex: () => Promise<Record<string, number>>
+  searchEverything: (query: string) => Promise<SearchHit[]>
+  quickCapture: (input: string) => Promise<CaptureResult>
 }
 
-export type PageId = 'dashboard' | 'monitor' | 'apps' | 'stats' | 'history' | 'settings'
+// ---- Productivity vault (notes / tasks / clipboard) ------------------------
+
+export interface Note {
+  id: string
+  title: string
+  body: string
+  tags: string[]
+  pinned: boolean
+  createdMs: number
+  updatedMs: number
+}
+
+export interface Task {
+  id: string
+  title: string
+  done: boolean
+  dueMs?: number | null
+  /** 0 = none, 1 = low, 2 = medium, 3 = high. */
+  priority: number
+  tags: string[]
+  createdMs: number
+  updatedMs: number
+  completedMs?: number | null
+}
+
+export interface Clip {
+  id: string
+  text: string
+  pinned: boolean
+  createdMs: number
+}
+
+export interface SearchHit {
+  kind: 'note' | 'task' | 'app'
+  id: string
+  title: string
+  subtitle: string
+  score: number
+  target: string
+}
+
+export interface CaptureResult {
+  kind: 'note' | 'task'
+  title: string
+  id: string
+}
+
+export type PageId =
+  // existing tracking surfaces
+  | 'dashboard'
+  | 'monitor'
+  | 'apps'
+  | 'stats'
+  | 'history'
+  | 'settings'
+  // productivity modules
+  | 'notes'
+  | 'tasks'
+  | 'clipboard'
+  | 'calendar'
+  | 'utilities'
+  | 'devtools'
+  | 'files'
 
 export interface ToastMsg {
   id: number
