@@ -107,7 +107,15 @@ export function TrendChart({
 
   const path = (accessor: (p: TrendPoint) => number) => {
     if (points.length === 0) return ''
-    return smoothLinePath(points.map((p, i) => ({ x: x(i), y: y(accessor(p)) })))
+    const pts = points.map((p, i) => ({ x: x(i), y: y(accessor(p)) }))
+    // One or two samples cannot make a line. A flat run across the plot is
+    // honest about what was measured and, unlike a lone "M x y", actually
+    // draws something.
+    if (pts.length === 1) {
+      const y0 = r2(pts[0].y)
+      return `M ${r2(pts[0].x - innerW / 4)} ${y0} L ${r2(pts[0].x + innerW / 4)} ${y0}`
+    }
+    return smoothLinePath(pts)
   }
 
   const areaD = () => {
@@ -200,6 +208,139 @@ export function TrendChart({
               </text>
             ))
           : null}
+      </svg>
+      <TooltipEl tip={tip} />
+    </div>
+  )
+}
+
+/**
+ * Today's usage, one column per local hour.
+ *
+ * The dashboard used to draw this range through `TrendChart`, which is a line
+ * chart: given a single day it produced a zero-width path and nothing appeared
+ * at all. Hours are also the right shape for one day — "when was I at this
+ * PC" has no answer in daily totals.
+ */
+export function HourChart({
+  hours,
+  activeHours,
+  height = 210,
+}: {
+  hours: number[]
+  activeHours: number[]
+  height?: number
+}) {
+  const { tip, show, hide } = useTooltip()
+  const [hover, setHover] = useState<number | null>(null)
+
+  const W = 800
+  const H = height
+  const PADX = 10
+  const PADT = 10
+  const PADB = 24
+  const innerW = W - PADX * 2
+  const innerH = H - PADT - PADB
+
+  const maxVal = Math.max(...hours, 1)
+  const colW = innerW / 24
+  const barW = Math.max(3, colW * 0.52)
+  // The hour the user is currently in, so the live edge of the day is obvious.
+  const nowHour = new Date().getHours()
+
+  const hourLabel = (h: number) => `${String(h).padStart(2, '0')}:00`
+
+  if (hours.every((v) => v <= 0)) {
+    return (
+      <div className="chart-empty-note">
+        Nothing recorded yet today — 1Boost fills this in as you use the PC.
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        style={{ width: '100%', height: 'auto', display: 'block' }}
+        onMouseLeave={() => {
+          hide()
+          setHover(null)
+        }}
+        role="img"
+        aria-label="PC usage by hour today"
+      >
+        {/* Baseline, so empty hours read as empty rather than as missing data. */}
+        <line x1={PADX} x2={W - PADX} y1={PADT + innerH} y2={PADT + innerH} stroke="var(--border)" strokeWidth="1" />
+        {hours.map((on, h) => {
+          const active = activeHours[h] ?? 0
+          const cx = PADX + colW * (h + 0.5)
+          const onH = (Math.min(on, maxVal) / maxVal) * innerH
+          const activeH = (Math.min(active, maxVal) / maxVal) * innerH
+          const future = h > nowHour
+          return (
+            <g key={h}>
+              {/* Full-height hit area: the whole column is hoverable, even
+                  when the column itself is a sliver. */}
+              <rect
+                x={cx - colW / 2}
+                y={PADT}
+                width={colW}
+                height={innerH}
+                fill="transparent"
+                onMouseMove={(e) => {
+                  show({
+                    x: e.clientX,
+                    y: e.clientY,
+                    title: `${hourLabel(h)} – ${hourLabel((h + 1) % 24)}`,
+                    sub: future ? 'later today' : 'PC on / active',
+                    value:
+                      on > 0
+                        ? `${formatDuration(on)} on · ${formatDuration(active)} active`
+                        : 'PC off',
+                  })
+                  setHover(h)
+                }}
+              />
+              {on > 0 && !future ? (
+                <rect
+                  x={cx - barW / 2}
+                  y={PADT + innerH - onH}
+                  width={barW}
+                  height={Math.max(onH, 1.5)}
+                  rx="2"
+                  fill="var(--accent)"
+                  opacity={hover === null || hover === h ? 0.32 : 0.16}
+                />
+              ) : null}
+              {active > 0 && !future ? (
+                <rect
+                  x={cx - barW / 2}
+                  y={PADT + innerH - activeH}
+                  width={barW}
+                  height={Math.max(activeH, 1.5)}
+                  rx="2"
+                  fill="var(--accent)"
+                />
+              ) : null}
+              {hover === h ? (
+                <line x1={cx} x2={cx} y1={PADT} y2={PADT + innerH} stroke="var(--border-strong)" strokeWidth="1" />
+              ) : null}
+            </g>
+          )
+        })}
+        {[0, 3, 6, 9, 12, 15, 18, 21].map((h) => (
+          <text
+            key={h}
+            x={PADX + colW * (h + 0.5)}
+            y={H - 8}
+            textAnchor="middle"
+            fontSize="10"
+            fill="var(--text-muted)"
+          >
+            {String(h).padStart(2, '0')}
+          </text>
+        ))}
       </svg>
       <TooltipEl tip={tip} />
     </div>

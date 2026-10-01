@@ -1,7 +1,8 @@
 // Generates the Tauri icon set (src-tauri/icons/) from the official artwork
 // in the root icons/ folder (or the procedural fallback), reusing the same
 // source-priority logic as make-icons.js. Produces:
-//   icon.ico, 32x32.png, 128x128.png, 128x128@2x.png, icon.png, tray.png
+//   icon.ico, 32x32.png, 128x128.png, 128x128@2x.png, icon.png
+// The tray artwork is separate on purpose — see make-tray-icons.mjs.
 // Usage: node scripts/make-tauri-icons.js
 import { mkdirSync, writeFileSync, readdirSync, readFileSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
@@ -305,7 +306,6 @@ writeFileSync(join(outDir, 'icon.ico'), icoFromSources(new Map([
   [32, png32],
   [16, png16],
 ])))
-writeFileSync(join(outDir, 'tray.png'), png32)
 
 console.log(
   `[icons-tauri] ${best ? `official ${best.name} (${best.w}px)` : 'procedural fallback'} -> src-tauri/icons/`,

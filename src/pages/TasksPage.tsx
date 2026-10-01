@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { CalendarClock, Check, ListChecks, Plus, Search, Trash2, X } from 'lucide-react'
+import { AlertCircle, CalendarClock, Check, ListChecks, Plus, Search, Trash2, X } from 'lucide-react'
 import type { Task } from '../../shared/types'
 import { bridge } from '../bridge'
 import { useFocusTarget } from '../nav'
@@ -42,13 +42,17 @@ export default function TasksPage() {
   const [filter, setFilter] = useState<Filter>('open')
   const [query, setQuery] = useState('')
   const [highlight, setHighlight] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const { focus, clearFocus } = useFocusTarget()
 
   const load = useCallback(async () => {
     try {
       setTasks(await bridge.tasksList())
+      return true
     } catch {
       setTasks([])
+      return false
     }
   }, [])
 
@@ -61,17 +65,36 @@ export default function TasksPage() {
     clearFocus()
   }, [focus, clearFocus])
 
+  /**
+   * Every failure here used to end in an unhandled rejection: the draft kept
+   * its text, the list never changed, and the button looked like it was just
+   * not wired up. It now says what went wrong and stays usable.
+   */
   const add = async () => {
     const title = draft.trim()
-    if (!title) return
-    await bridge.taskSave(emptyTask0(title))
-    setDraft('')
-    await load()
+    if (!title || saving) return
+    setSaving(true)
+    setError(null)
+    try {
+      await bridge.taskSave(emptyTask0(title))
+      setDraft('')
+      // A saved task that the list cannot show back reads as a dead button,
+      // so say so rather than leaving an empty screen.
+      if (!(await load())) setError('Saved, but the task list could not be refreshed.')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'That task could not be saved.')
+    } finally {
+      setSaving(false)
+    }
   }
 
   const toggle = async (id: string) => {
-    await bridge.taskToggle(id)
-    await load()
+    try {
+      await bridge.taskToggle(id)
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'That task could not be updated.')
+    }
   }
 
   const setPriority = async (task: Task, priority: number) => {
@@ -115,13 +138,25 @@ export default function TasksPage() {
           placeholder="Add a task and press Enter…"
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') void add()
+            if (e.key !== 'Enter') return
+            // Otherwise the keypress can submit twice in some webview builds.
+            e.preventDefault()
+            void add()
           }}
         />
-        <button className="btn btn-primary" onClick={() => void add()} disabled={!draft.trim()}>
-          Add
+        <button className="btn btn-primary" onClick={() => void add()} disabled={!draft.trim() || saving}>
+          {saving ? 'Adding…' : 'Add'}
         </button>
       </div>
+      {error ? (
+        <div className="setting-note bad" role="alert">
+          <AlertCircle size={14} />
+          <span className="grow">{error}</span>
+          <button className="btn btn-ghost" onClick={() => setError(null)}>
+            <X size={14} /> Dismiss
+          </button>
+        </div>
+      ) : null}
 
       <div className="tasks-controls">
         <div className="segmented">

@@ -150,6 +150,11 @@ export interface AppAgg {
 }
 
 export interface DayData {
+  /** PC-on milliseconds per local hour (index = local hour). Optional so data
+      files written before 1.3.1 still typecheck. */
+  hours?: number[]
+  /** Same buckets, active time only. */
+  activeHours?: number[]
   /** Local calendar day, YYYY-MM-DD. */
   date: string
   pcOnMs: number
@@ -245,6 +250,8 @@ export interface DashboardData {
   today: DayData
   apps: AppUsageItem[]
   hourly: number[]
+  /** Same 24 buckets, active time only. */
+  hourlyActive: number[]
   snapshot: LiveSnapshot
   totals: UsageData['totals']
   daily: TrendPoint[]

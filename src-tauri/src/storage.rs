@@ -57,6 +57,18 @@ fn num_u64(v: Option<&serde_json::Value>) -> u64 {
     }
 }
 
+/// Reads one of the 24 per-hour buckets from a recovered day.
+///
+/// Anything missing, short, or not a number becomes zero rather than
+/// discarding the day: a repaired file should still show the usage it has,
+/// and an all-zero bucket array falls back to the legacy estimate.
+fn num_hour(v: Option<&serde_json::Value>, hour: usize) -> u64 {
+    match v.and_then(|a| a.as_array()).and_then(|a| a.get(hour)) {
+        Some(serde_json::Value::Number(n)) => n.as_u64().unwrap_or(0),
+        _ => 0,
+    }
+}
+
 /// Normalize + validate a parsed UsageData to survive schema drift / hand
 /// edits (port of normalizeUsageData).
 pub fn normalize_usage_data(v: serde_json::Value) -> UsageData {
@@ -96,6 +108,8 @@ pub fn normalize_usage_data(v: serde_json::Value) -> UsageData {
                     battery_ms: num_u64(d.get("batteryMs")),
                     ac_ms: num_u64(d.get("acMs")),
                     focus_ms: num_u64(d.get("focusMs")),
+                    hours: std::array::from_fn(|h| num_hour(d.get("hours"), h)),
+                    active_hours: std::array::from_fn(|h| num_hour(d.get("activeHours"), h)),
                     apps,
                 },
             );

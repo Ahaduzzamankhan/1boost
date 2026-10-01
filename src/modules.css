@@ -1216,3 +1216,107 @@
 .file-row:hover .file-actions {
   opacity: 1;
 }
+
+/* ============================================================
+   Module motion
+   ============================================================ */
+/* Same rule as the Motion & depth section in index.css: opacity, colour and
+   shadow only on large surfaces, so nothing here can tear against the
+   window-level backdrop-filter. Small controls are free to transform. */
+
+/* A sheen that runs along the progress bars, so "measuring right now" is
+   visible without adding another element. */
+.bar > div {
+  background-image: linear-gradient(
+    100deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.45) 50%,
+    transparent 100%
+  );
+  background-size: 220% 100%;
+  background-repeat: no-repeat;
+  animation: barSheen 1.9s linear infinite;
+}
+
+@keyframes barSheen {
+  from { background-position: 180% 0; }
+  to { background-position: -80% 0; }
+}
+
+/* Tasks: the add bar answers immediately, and each row lands on its own. */
+.tasks-add:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.tasks-add > svg {
+  transition: color var(--transition-normal) var(--ease), transform var(--transition-normal) var(--ease);
+}
+
+.tasks-add:focus-within > svg {
+  color: var(--accent);
+  transform: scale(1.12);
+}
+
+.task-row {
+  animation: taskRowIn 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.task-row:nth-child(1) { animation-delay: 0ms; }
+.task-row:nth-child(2) { animation-delay: 30ms; }
+.task-row:nth-child(3) { animation-delay: 60ms; }
+.task-row:nth-child(4) { animation-delay: 90ms; }
+.task-row:nth-child(5) { animation-delay: 120ms; }
+.task-row:nth-child(6) { animation-delay: 150ms; }
+.task-row:nth-child(n + 7) { animation-delay: 180ms; }
+
+@keyframes taskRowIn {
+  from {
+    opacity: 0;
+    background-color: var(--accent-soft);
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* A new task announces itself before it settles: `.task-row.flash` above
+   wins on specificity over the entrance animation above it. */
+
+.task-check:hover {
+  transform: scale(1.12);
+}
+
+.task-check.checked {
+  animation: checkPop 260ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes checkPop {
+  0% { transform: scale(1); }
+  45% { transform: scale(1.22); }
+  100% { transform: scale(1); }
+}
+
+.prio-dot {
+  transition: background-color var(--transition-fast) var(--ease),
+    transform var(--transition-fast) var(--ease), box-shadow var(--transition-fast) var(--ease);
+}
+
+.prio-dot:hover {
+  transform: scale(1.35);
+}
+
+.prio-dot.active {
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* Notes and clips: the selected row keeps an accent edge that draws in. */
+.note-row.active,
+.clip-row.pinned {
+  animation: edgeIn 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes edgeIn {
+  from { box-shadow: inset 2px 0 0 0 transparent; }
+  to { box-shadow: inset 2px 0 0 0 var(--accent); }
+}

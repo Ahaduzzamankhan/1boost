@@ -40,6 +40,56 @@ export function LoadingScreen({ label }: { label?: string }) {
   )
 }
 
+/**
+ * The heading every module opens with.
+ *
+ * These were hand-written a dozen times with four different margin
+ * combinations, which is most of why the pages did not feel like one product.
+ * One component means the title size, the subtitle tone and the gap between
+ * them are decided once.
+ */
+export function PageHeader({
+  title,
+  subtitle,
+  action,
+}: {
+  title: string
+  subtitle?: string
+  action?: ReactNode
+}) {
+  return (
+    <header className="page-header">
+      <div className="page-header-text">
+        <h1 className="page-title">{title}</h1>
+        {subtitle ? <p className="page-subtitle">{subtitle}</p> : null}
+      </div>
+      {action ? <div className="page-header-action">{action}</div> : null}
+    </header>
+  )
+}
+
+/**
+ * A single fact, inline. Used where the previous code nested a `.card`
+ * inside a `.card`: a border inside a border reads as clutter and costs a
+ * layer of visual weight for something that is not a container.
+ */
+export function Chip({
+  icon,
+  children,
+  tone = 'neutral',
+}: {
+  icon?: ReactNode
+  children: ReactNode
+  tone?: 'neutral' | 'good' | 'warn'
+}) {
+  return (
+    <span className={`chip chip-${tone}`}>
+      {icon}
+      <span>{children}</span>
+    </span>
+  )
+}
+
 export function EmptyState({
   icon,
   title,

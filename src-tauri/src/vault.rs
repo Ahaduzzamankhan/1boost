@@ -15,6 +15,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use crate::util::LockOk;
+
 const MAX_CLIPS: usize = 500;
 const MAX_NOTES: usize = 5000;
 const MAX_TASKS: usize = 5000;
@@ -157,28 +159,28 @@ impl Vault {
         let notes: Vec<Note> = read_json(&self.dir.join("notes.json"));
         let tasks: Vec<Task> = read_json(&self.dir.join("tasks.json"));
         let clip_payload: ClipPayload = read_json(&self.dir.join("clipboard.json"));
-        *self.notes.lock().unwrap() = notes;
-        *self.tasks.lock().unwrap() = tasks;
-        *self.clips.lock().unwrap() = clip_payload.clips;
+        *self.notes.lock_ok() = notes;
+        *self.tasks.lock_ok() = tasks;
+        *self.clips.lock_ok() = clip_payload.clips;
     }
 
     fn save_notes(&self) {
-        write_json(&self.dir.join("notes.json"), &*self.notes.lock().unwrap());
+        write_json(&self.dir.join("notes.json"), &*self.notes.lock_ok());
     }
 
     fn save_tasks(&self) {
-        write_json(&self.dir.join("tasks.json"), &*self.tasks.lock().unwrap());
+        write_json(&self.dir.join("tasks.json"), &*self.tasks.lock_ok());
     }
 
     fn save_clips(&self) {
-        let clips = self.clips.lock().unwrap().clone();
+        let clips = self.clips.lock_ok().clone();
         write_json(&self.dir.join("clipboard.json"), &ClipPayload { clips });
     }
 
     // ----- notes ----------------------------------------------------------
 
     pub fn notes(&self) -> Vec<Note> {
-        let mut list = self.notes.lock().unwrap().clone();
+        let mut list = self.notes.lock_ok().clone();
         list.sort_by(|a, b| {
             b.pinned.cmp(&a.pinned).then(b.updated_ms.cmp(&a.updated_ms))
         });
@@ -196,7 +198,7 @@ impl Vault {
         note.updated_ms = now_ms();
         note.title = note.title.trim().to_string();
         note.tags = normalize_tags(note.tags);
-        let mut list = self.notes.lock().unwrap();
+        let mut list = self.notes.lock_ok();
         match list.iter().position(|n| n.id == note.id) {
             Some(i) => list[i] = note.clone(),
             None => {
@@ -216,7 +218,7 @@ impl Vault {
     }
 
     pub fn delete_note(&self, id: &str) -> bool {
-        let mut list = self.notes.lock().unwrap();
+        let mut list = self.notes.lock_ok();
         let before = list.len();
         list.retain(|n| n.id != id);
         let changed = list.len() != before;
@@ -230,7 +232,7 @@ impl Vault {
     // ----- tasks ----------------------------------------------------------
 
     pub fn tasks(&self) -> Vec<Task> {
-        let mut list = self.tasks.lock().unwrap().clone();
+        let mut list = self.tasks.lock_ok().clone();
         list.sort_by(|a, b| {
             a.done
                 .cmp(&b.done)
@@ -262,7 +264,7 @@ impl Vault {
         if !task.done {
             task.completed_ms = None;
         }
-        let mut list = self.tasks.lock().unwrap();
+        let mut list = self.tasks.lock_ok();
         match list.iter().position(|t| t.id == task.id) {
             Some(i) => list[i] = task.clone(),
             None => {
@@ -281,7 +283,7 @@ impl Vault {
     }
 
     pub fn toggle_task(&self, id: &str) -> Option<Task> {
-        let mut list = self.tasks.lock().unwrap();
+        let mut list = self.tasks.lock_ok();
         let task = list.iter_mut().find(|t| t.id == id)?;
         task.done = !task.done;
         task.updated_ms = now_ms();
@@ -293,7 +295,7 @@ impl Vault {
     }
 
     pub fn delete_task(&self, id: &str) -> bool {
-        let mut list = self.tasks.lock().unwrap();
+        let mut list = self.tasks.lock_ok();
         let before = list.len();
         list.retain(|t| t.id != id);
         let changed = list.len() != before;
@@ -305,7 +307,7 @@ impl Vault {
     }
 
     pub fn clear_done_tasks(&self) -> usize {
-        let mut list = self.tasks.lock().unwrap();
+        let mut list = self.tasks.lock_ok();
         let before = list.len();
         list.retain(|t| !t.done);
         let removed = before - list.len();
@@ -319,7 +321,7 @@ impl Vault {
     // ----- clipboard ------------------------------------------------------
 
     pub fn clips(&self) -> Vec<Clip> {
-        let mut list = self.clips.lock().unwrap().clone();
+        let mut list = self.clips.lock_ok().clone();
         list.sort_by(|a, b| b.pinned.cmp(&a.pinned).then(b.created_ms.cmp(&a.created_ms)));
         list
     }
@@ -332,13 +334,13 @@ impl Vault {
             return None;
         }
         {
-            let mut last = self.last_clip.lock().unwrap();
+            let mut last = self.last_clip.lock_ok();
             if *last == text {
                 return None;
             }
             *last = text.clone();
         }
-        let mut list = self.clips.lock().unwrap();
+        let mut list = self.clips.lock_ok();
         if list.iter().any(|c| c.text == text) {
             return None;
         }
@@ -361,7 +363,7 @@ impl Vault {
     }
 
     pub fn toggle_clip_pin(&self, id: &str) -> Option<Clip> {
-        let mut list = self.clips.lock().unwrap();
+        let mut list = self.clips.lock_ok();
         let clip = list.iter_mut().find(|c| c.id == id)?;
         clip.pinned = !clip.pinned;
         let out = clip.clone();
@@ -371,7 +373,7 @@ impl Vault {
     }
 
     pub fn delete_clip(&self, id: &str) -> bool {
-        let mut list = self.clips.lock().unwrap();
+        let mut list = self.clips.lock_ok();
         let before = list.len();
         list.retain(|c| c.id != id);
         let changed = list.len() != before;
@@ -383,7 +385,7 @@ impl Vault {
     }
 
     pub fn clear_clips(&self) -> usize {
-        let mut list = self.clips.lock().unwrap();
+        let mut list = self.clips.lock_ok();
         let before = list.len();
         list.retain(|c| c.pinned);
         let removed = before - list.len();
@@ -403,7 +405,7 @@ impl Vault {
     /// not recorded as a fresh entry.
     pub fn seed_clipboard(&self) {
         if let Some(text) = crate::clipboard::get_text() {
-            *self.last_clip.lock().unwrap() = text;
+            *self.last_clip.lock_ok() = text;
         }
     }
 }
@@ -581,6 +583,30 @@ mod tests {
         static N: AtomicU32 = AtomicU32::new(0);
         let dir = std::env::temp_dir().join(format!("1boost-vault-{}-{}", tag, N.fetch_add(1, Ordering::Relaxed)));
         Vault::new(dir)
+    }
+
+    /// A single panicking thread used to take a whole collection down for
+    /// the rest of the session: the mutex stayed poisoned, every later
+    /// command panicked, and from the UI every task and note button simply
+    /// stopped responding. The data is always left consistent, so the guard
+    /// is recovered instead.
+    #[test]
+    fn a_panicking_writer_does_not_permanently_break_the_vault() {
+        let v = temp_vault("poison");
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _held = v.tasks.lock().unwrap();
+            panic!("simulated panic while holding the tasks lock");
+        }));
+        assert!(panicked.is_err(), "the simulated panic should have fired");
+        assert!(v.tasks.lock().is_err(), "and it should have poisoned the mutex");
+
+        // Every task operation still works against the poisoned lock.
+        let saved = v.save_task(Task { title: "Still working".into(), ..Default::default() });
+        assert_eq!(v.tasks().len(), 1);
+        assert_eq!(v.tasks()[0].id, saved.id);
+        assert!(v.toggle_task(&saved.id).expect("toggle should still work").done);
+        assert!(v.delete_task(&saved.id));
+        assert!(v.tasks().is_empty());
     }
 
     #[test]

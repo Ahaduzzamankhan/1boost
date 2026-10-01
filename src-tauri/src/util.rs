@@ -1,6 +1,26 @@
 //! Small shared helpers.
 
+use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Locks that survive a poisoning panic.
+///
+/// `Mutex::lock().unwrap()` turns one panic in a thread that held the lock
+/// into a permanently broken feature: every later call panics too, Tauri
+/// turns that into a rejected command, and the renderer — which cannot tell
+/// a poisoned mutex from anything else — shows a button that quietly does
+/// nothing. The data behind a `Mutex` here is plain vectors and strings that
+/// are always left in a consistent state, so recovering the guard is safe
+/// and keeps one bad frame from killing a whole subsystem.
+pub trait LockOk<T> {
+    fn lock_ok(&self) -> MutexGuard<'_, T>;
+}
+
+impl<T> LockOk<T> for Mutex<T> {
+    fn lock_ok(&self) -> MutexGuard<'_, T> {
+        self.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
 
 pub fn now_ms() -> u64 {
     SystemTime::now()
@@ -60,15 +80,33 @@ pub fn shift_day_key(key: &str, days: i64) -> Option<String> {
 }
 
 // ---------------------------------------------------------------------------
-// Local timezone offset (cached once per process)
+// Local timezone offset
 // ---------------------------------------------------------------------------
+//
+// Cached, but not forever: a laptop that crosses a DST boundary or whose user
+// changes the timezone in Windows would otherwise keep filing samples under
+// yesterday's day key, and the day would silently split in two. The clock read
+// is cheap, so it is refreshed on a timer instead of once per process.
 
-use std::sync::OnceLock;
+use std::sync::Mutex;
+use std::time::Instant;
 
-static OFFSET: OnceLock<i64> = OnceLock::new();
+/// How long a cached offset is trusted. Comfortably under the shortest DST
+/// transition, so a boundary is never crossed with a stale offset.
+const OFFSET_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+
+static OFFSET: Mutex<Option<(Instant, i64)>> = Mutex::new(None);
 
 fn local_utc_offset_secs() -> i64 {
-    *OFFSET.get_or_init(|| unsafe { compute_local_offset_secs() })
+    let mut guard = OFFSET.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((taken, offset)) = *guard {
+        if taken.elapsed() < OFFSET_TTL {
+            return offset;
+        }
+    }
+    let offset = unsafe { compute_local_offset_secs() };
+    *guard = Some((Instant::now(), offset));
+    offset
 }
 
 /// Public read-only accessor (used by the hourly histogram).
@@ -164,5 +202,47 @@ mod tests {
         assert_eq!(shift_day_key("2026-09-30", 1).unwrap(), "2026-10-01");
         assert_eq!(shift_day_key("2026-03-01", -1).unwrap(), "2026-02-28");
         assert_eq!(shift_day_key("2026-01-01", -1).unwrap(), "2025-12-31");
+    }
+
+    #[test]
+    fn day_keys_are_distinct_across_a_month_boundary() {
+        // The dashboard slices the trend by day key, so a day that merged into
+        // its neighbour would silently drop a whole day of usage.
+        assert_ne!(shift_day_key("2026-01-31", 1).unwrap(), "2026-02-01");
+        assert_eq!(shift_day_key("2026-12-31", 1).unwrap(), "2027-01-01");
+        // Leap day.
+        assert_eq!(shift_day_key("2028-02-28", 1).unwrap(), "2028-02-29");
+        assert_eq!(shift_day_key("2028-03-01", -1).unwrap(), "2028-02-29");
+    }
+
+    #[test]
+    fn a_full_year_of_shifts_is_invertible() {
+        // Guards the arithmetic the retention trim and the trend window both
+        // depend on: shifting forward then back must land on the same key.
+        let mut key = "2026-01-01".to_string();
+        for _ in 0..365 {
+            key = shift_day_key(&key, 1).unwrap();
+        }
+        assert_eq!(key, "2026-12-31");
+        for _ in 0..365 {
+            key = shift_day_key(&key, -1).unwrap();
+        }
+        assert_eq!(key, "2026-01-01");
+    }
+
+    #[test]
+    fn weekday_survives_a_long_shift_chain() {
+        // Each shift must advance the weekday by exactly one.
+        let key = shift_day_key("2026-09-28", 100).unwrap();
+        assert_eq!(weekday_of_key(&key), (weekday_of_key("2026-09-28") + 100) % 7);
+    }
+
+    #[test]
+    fn the_offset_cache_is_safe_to_read_concurrently() {
+        // The tracker loop and the UI both call this; a poisoned cache must not
+        // take the tracking thread down with it.
+        let a = std::thread::spawn(local_utc_offset_secs);
+        let b = std::thread::spawn(local_utc_offset_secs);
+        assert_eq!(a.join().unwrap(), b.join().unwrap());
     }
 }

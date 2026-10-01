@@ -45,7 +45,7 @@ const DevToolsPage = lazy(() => import('../pages/DevToolsPage'))
 const FilesPage = lazy(() => import('../pages/FilesPage'))
 
 /** Workspace groups, so the sidebar stays scannable as modules grow. */
-export type WorkspaceId = 'insight' | 'capture' | 'utilities' | 'system'
+export type WorkspaceId = 'insight' | 'capture' | 'utilities'
 
 export interface Workspace {
   id: WorkspaceId
@@ -58,7 +58,8 @@ export interface ModuleDef {
   label: string
   /** Extra search terms for the command palette. */
   keywords: string[]
-  workspace: WorkspaceId
+  /** Absent for footer entries, which live outside every workspace. */
+  workspace?: WorkspaceId
   icon: ReactNode
   component: LazyExoticComponent<ComponentType<any>>
   /** Settings lives in the sidebar footer, not in a workspace list. */
@@ -69,7 +70,6 @@ export const WORKSPACES: Workspace[] = [
   { id: 'insight', label: 'Insight', blurb: 'Where your time goes' },
   { id: 'capture', label: 'Capture', blurb: 'Notes, tasks and the clipboard' },
   { id: 'utilities', label: 'Utilities', blurb: 'Everyday and developer tools' },
-  { id: 'system', label: 'System', blurb: '1Boost settings' },
 ]
 
 /**
@@ -177,8 +177,10 @@ export const MODULES: ModuleDef[] = [
   {
     id: 'settings',
     label: 'Settings',
-    keywords: ['settings', 'preferences', 'theme', 'startup', 'tray', 'about'],
-    workspace: 'system',
+    keywords: ['settings', 'preferences', 'theme', 'startup', 'tray', 'about', 'system'],
+    // Settings is a footer entry: it belongs to the shell, not to a group.
+    // The old "System" workspace existed only to hold it and rendered as an
+    // empty sidebar heading, so its functionality lives here instead.
     icon: <SettingsIcon size={18} />,
     component: SettingsPage,
     footer: true,

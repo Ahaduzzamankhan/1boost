@@ -74,6 +74,12 @@ export default function SettingsPage({
 }) {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [exporting, setExporting] = useState(false)
+  const [exportResult, setExportResult] = useState<{
+    ok: boolean
+    path?: string
+    canceled?: boolean
+    error?: string
+  } | null>(null)
   const [launch, setLaunch] = useState<LaunchState | null>(null)
   const [repairing, setRepairing] = useState(false)
   const [update, setUpdate] = useState<UpdateState | null>(null)
@@ -348,16 +354,50 @@ export default function SettingsPage({
               disabled={exporting}
               onClick={async () => {
                 setExporting(true)
+                setExportResult(null)
                 try {
-                  await bridge.exportJson()
+                  // The result used to be dropped on the floor, which is why
+                  // this button looked broken no matter what it did.
+                  const res = await bridge.exportJson()
+                  setExportResult(res)
+                } catch (e) {
+                  setExportResult({
+                    ok: false,
+                    error: e instanceof Error ? e.message : 'The export could not be started.',
+                  })
                 } finally {
                   setExporting(false)
                 }
               }}
             >
-              <Download size={15} /> Export JSON
+              <Download size={15} /> {exporting ? 'Exporting…' : 'Export JSON'}
             </button>
           </div>
+          {exportResult ? (
+            <div className={`setting-note${exportResult.ok ? ' ok' : ' bad'}`} role="status">
+              {exportResult.ok ? (
+                <>
+                  <CheckCircle2 size={14} />
+                  <span className="selectable grow">Exported to {exportResult.path}</span>
+                  {exportResult.path ? (
+                    <button
+                      className="btn btn-ghost"
+                      onClick={() => void bridge.openFile(exportResult.path as string, true)}
+                    >
+                      <FolderOpen size={14} /> Show
+                    </button>
+                  ) : null}
+                </>
+              ) : exportResult.canceled ? (
+                <span className="muted">Export canceled.</span>
+              ) : (
+                <>
+                  <AlertCircle size={14} />
+                  <span className="grow">{exportResult.error ?? 'The export failed.'}</span>
+                </>
+              )}
+            </div>
+          ) : null}
           <div className="setting-row">
             <div className="setting-info">
               <div className="setting-title">Data file</div>

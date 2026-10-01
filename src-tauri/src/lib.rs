@@ -18,6 +18,7 @@ mod payload;
 mod settings;
 mod storage;
 mod tracker;
+mod trayicon;
 mod updater;
 mod util;
 mod vault;
@@ -26,9 +27,11 @@ use model::*;
 use monitor::MonitorPayload;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 use tracker::SharedTracker;
 use util::now_ms;
@@ -48,6 +51,9 @@ pub struct AppState {
 const SAMPLE_MS: u64 = 1200;
 const EVENT_POLL_MS: u64 = 500;
 const MONITOR_MS: u64 = 2000;
+
+/// Tray id. Owned by `setup_tray` — see the note there.
+const TRAY_ID: &str = "main-tray";
 const SAVE_TICK_MS: u64 = 250;
 const STARTUP_DELAY_MS: u64 = 15_000;
 const RECHECK_MS: u64 = 6 * 60 * 60_000;
@@ -186,16 +192,24 @@ pub fn show_main(app: &AppHandle, page: Option<&str>) {
     }
 }
 
-fn update_tray_state(app: &AppHandle, paused: bool) {
-    if let Some(tray) = app.tray_by_id("main-tray") {
-        let tip = if paused {
-            "1Boost — tracking paused"
-        } else {
-            "1Boost — tracking your PC usage"
-        };
-        let _ = tray.set_tooltip(Some(tip));
+fn tray_tooltip(paused: bool) -> &'static str {
+    if paused {
+        "1Boost — tracking paused"
+    } else {
+        "1Boost — tracking your PC usage"
     }
-    if let Some(toggle) = app.state::<AppState>().tray_toggle.lock().unwrap().as_ref() {
+}
+
+fn update_tray_state(app: &AppHandle, paused: bool) {
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        let _ = tray.set_tooltip(Some(tray_tooltip(paused)));
+    }
+    // A poisoned lock here would panic inside the tray menu handler, which
+    // Tauri swallows — so the pause toggle would silently stop working. Take
+    // the inner value instead.
+    let st = app.state::<AppState>();
+    let guard = st.tray_toggle.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(toggle) = guard.as_ref() {
         let label = if paused { "Resume Tracking" } else { "Pause Tracking" };
         let _ = toggle.set_text(label);
     }
@@ -213,18 +227,24 @@ fn build_tray_menu(app: &AppHandle) -> tauri::Result<(tauri::menu::Menu<tauri::W
     Ok((menu, toggle))
 }
 
+/// The one and only tray icon.
+///
+/// `tauri.conf.json` deliberately does **not** declare `app.trayIcon`: a
+/// config tray is built before `setup` runs and claims the `main-tray` id, so
+/// this function used to find an existing icon, return early, and leave the
+/// user with a menu-less icon that did nothing. The Rust side owns the tray
+/// now, which is the only place the menu, tooltip and click handlers live.
 pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
-    if app.tray_by_id("main-tray").is_some() {
-        if let Some(t) = app.tray_by_id("main-tray") {
-            let _ = t.set_visible(true);
-        }
+    if let Some(existing) = app.tray_by_id(TRAY_ID) {
+        let _ = existing.set_visible(true);
         return Ok(());
     }
     let (menu, toggle) = build_tray_menu(app)?;
-    let mut builder = TrayIconBuilder::with_id("main-tray")
+    let variant = trayicon::variant_for(app);
+    let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .tooltip("1Boost — tracking your PC usage")
+        .tooltip(tray_tooltip(false))
         .on_menu_event(|app, event| match event.id().as_ref() {
             "open" => show_main(app, Some("dashboard")),
             "toggle" => {
@@ -257,20 +277,26 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
                 show_main(tray.app_handle(), None);
             }
         });
-    if let Some(icon) = app.default_window_icon().cloned() {
-        builder = builder.icon(icon);
+    // Always give the tray an explicit icon: an iconless tray entry is what
+    // Windows renders as a blank square. The window icon is only a safety net
+    // for the case where the embedded glyph somehow fails to decode. The type
+    // is spelled out because the two sources have different lifetimes.
+    let icon: Option<Image<'_>> = variant.image().or_else(|| app.default_window_icon().cloned());
+    match icon {
+        Some(icon) => builder = builder.icon(icon),
+        None => log::error!("[1boost] tray icon could not be decoded; the tray will show a blank icon"),
     }
     let tray = builder.build(app)?;
     {
         let st = app.state::<AppState>();
-        *st.tray_handle.lock().unwrap() = Some(tray);
-        *st.tray_toggle.lock().unwrap() = Some(toggle);
+        *st.tray_handle.lock().unwrap_or_else(|e| e.into_inner()) = Some(tray);
+        *st.tray_toggle.lock().unwrap_or_else(|e| e.into_inner()) = Some(toggle);
     }
     Ok(())
 }
 
 fn hide_tray(app: &AppHandle) {
-    if let Some(tray) = app.tray_by_id("main-tray") {
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
         let _ = tray.set_visible(false);
     }
 }
@@ -515,23 +541,97 @@ fn open_data_folder(app: AppHandle) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Serializes the usage database to wherever the user says.
+///
+/// The previous version wrote straight into `%APPDATA%\1Boost` and returned
+/// the path, but nothing on the renderer ever looked at the result — so the
+/// button appeared to do nothing and the file was never where anyone looks
+/// for it. This asks first, writes second, and reports what happened.
 #[tauri::command]
-fn export_json(app: AppHandle) -> ExportResult {
-    let st = app.state::<AppState>();
-    let storage = st.tracker.storage.lock().unwrap();
-    let path = storage::user_data_dir().join(format!("1Boost-usage-export-{}.json", util::day_key(now_ms())));
-    match serde_json::to_string_pretty(&storage.data) {
-        Ok(payload) => match std::fs::write(&path, payload) {
-            Ok(_) => ExportResult {
-                ok: true,
+async fn export_json(app: AppHandle) -> ExportResult {
+    let name = format!("1Boost-usage-export-{}.json", util::day_key(now_ms()));
+    // Async commands run off the main thread, which is what the dialog
+    // plugin's blocking picker requires.
+    let chosen = app
+        .dialog()
+        .add_filter("JSON", &["json"])
+        .set_file_name(&name)
+        .set_directory(default_export_dir())
+        .blocking_save_file();
+
+    let Some(target) = chosen else {
+        return ExportResult { ok: false, path: None, canceled: true, error: None };
+    };
+    let path = match target {
+        tauri_plugin_dialog::FilePath::Path(p) => p,
+        // The native picker only ever hands back a path; anything else would
+        // be a non-file location, which is not something we can write to.
+        _ => {
+            return ExportResult {
+                ok: false,
+                path: None,
+                canceled: false,
+                error: Some("the picker did not return a file path".into()),
+            }
+        }
+    };
+
+    // Snapshot under the lock, then let it go: the tracking loop writes
+    // through this same mutex, and it should not wait on a file write.
+    let payload = {
+        let st = app.state::<AppState>();
+        let storage = st.tracker.storage.lock().unwrap_or_else(|e| e.into_inner());
+        serde_json::to_string_pretty(&storage.data)
+    };
+    let payload = match payload {
+        Ok(p) => p,
+        Err(e) => {
+            return ExportResult {
+                ok: false,
                 path: Some(path.display().to_string()),
                 canceled: false,
-                error: None,
-            },
-            Err(e) => ExportResult { ok: false, path: None, canceled: false, error: Some(e.to_string()) },
-        },
-        Err(e) => ExportResult { ok: false, path: None, canceled: false, error: Some(e.to_string()) },
+                error: Some(format!("could not serialize your usage data: {e}")),
+            }
+        }
+    };
+
+    if let Some(dir) = path.parent() {
+        if !dir.as_os_str().is_empty() {
+            if let Err(e) = std::fs::create_dir_all(dir) {
+                return ExportResult {
+                    ok: false,
+                    path: Some(path.display().to_string()),
+                    canceled: false,
+                    error: Some(format!("could not create {}: {e}", dir.display())),
+                };
+            }
+        }
     }
+
+    match std::fs::write(&path, payload) {
+        Ok(_) => ExportResult {
+            ok: true,
+            path: Some(path.display().to_string()),
+            canceled: false,
+            error: None,
+        },
+        Err(e) => ExportResult {
+            ok: false,
+            path: Some(path.display().to_string()),
+            canceled: false,
+            error: Some(format!("could not write {}: {e}", path.display())),
+        },
+    }
+}
+
+/// Where the export picker opens: Documents, which is where someone looking
+/// for an export will look first.
+fn default_export_dir() -> std::path::PathBuf {
+    std::env::var_os("USERPROFILE")
+        .map(std::path::PathBuf::from)
+        .map(|p| p.join("Documents"))
+        .filter(|p| p.is_dir())
+        .unwrap_or_else(storage::user_data_dir)
 }
 
 // Window controls -------------------------------------------------------------

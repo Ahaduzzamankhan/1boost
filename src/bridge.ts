@@ -71,6 +71,7 @@ function createBrowserHarnessBridge(): Bridge {
     today,
     apps: [],
     hourly: new Array(24).fill(0),
+    hourlyActive: new Array(24).fill(0),
     snapshot: {
       version: 1,
       nowMs: Date.now(),

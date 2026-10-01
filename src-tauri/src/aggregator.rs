@@ -86,12 +86,45 @@ pub fn daily_trend(data: &UsageData, days: i64, now_ms: u64) -> Vec<TrendPoint> 
     out
 }
 
-/// Proportional per-hour histogram of today's PC-on time (mirrors
-/// hourHistogram: split observed window across the hours it covers).
+/// Per-hour histogram of today's PC-on time.
+///
+/// The buckets are recorded as samples arrive, so this is real data rather
+/// than a shape guessed from the day's first and last sample. Days recorded
+/// before 1.3.1 have no buckets at all; those fall back to spreading the day
+/// evenly across the hours it spanned, which is the best that can be said
+/// about them and is what the dashboard drew before.
 pub fn hour_histogram(day: Option<&DayData>) -> Vec<f64> {
+    let Some(day) = day else { return vec![0.0; 24] };
+    if day.pc_on_ms == 0 {
+        return vec![0.0; 24];
+    }
+    if day.hours.iter().any(|ms| *ms > 0) {
+        return day.hours.iter().map(|ms| *ms as f64).collect();
+    }
+    legacy_spread(day)
+}
+
+/// Same, for time the user was actually active.
+pub fn active_hour_histogram(day: Option<&DayData>) -> Vec<f64> {
+    let Some(day) = day else { return vec![0.0; 24] };
+    if day.active_ms == 0 {
+        return vec![0.0; 24];
+    }
+    if day.active_hours.iter().any(|ms| *ms > 0) {
+        return day.active_hours.iter().map(|ms| *ms as f64).collect();
+    }
+    // A legacy day: scale the PC-on estimate by the active share so the two
+    // series stay in proportion.
+    let on = hour_histogram(Some(day));
+    let share = (day.active_ms as f64 / day.pc_on_ms as f64).clamp(0.0, 1.0);
+    on.iter().map(|v| v * share).collect()
+}
+
+/// Days recorded before per-hour tracking existed: spread the observed PC-on
+/// time evenly across every hour the day spanned.
+fn legacy_spread(day: &DayData) -> Vec<f64> {
     let mut out = vec![0.0f64; 24];
-    let Some(day) = day else { return out };
-    if day.pc_on_ms == 0 || day.last_ms <= day.first_ms {
+    if day.last_ms <= day.first_ms {
         return out;
     }
     let span = (day.last_ms - day.first_ms) as f64;
@@ -102,14 +135,25 @@ pub fn hour_histogram(day: Option<&DayData>) -> Vec<f64> {
     let per_hour = clamped / span;
     let start_h = hour_of(day.first_ms);
     let end_h = hour_of(day.last_ms);
-    for h in start_h..=end_h {
+    // `last_ms` can round into the next local hour (and a stale clock can put
+    // it past midnight), so walk forward rather than trusting `start <= end`.
+    let mut h = start_h;
+    loop {
         out[(h % 24) as usize] += per_hour;
+        if h == end_h {
+            break;
+        }
+        h += 1;
+        if h > start_h + 48 {
+            break; // pathological clock; stop rather than spin
+        }
     }
     out
 }
 
-fn hour_of(ms: u64) -> u64 {
-    // Local hour of an epoch-ms timestamp (same offset day_key uses).
+/// Local hour (0-23) of an epoch-ms timestamp, using the same offset the day
+/// key uses so an hour can never land in a different day than its day key.
+pub fn hour_of(ms: u64) -> u64 {
     let secs = (ms / 1000) as i64 + crate::util::local_offset_secs();
     (secs.rem_euclid(86_400) / 3600) as u64
 }
@@ -277,6 +321,7 @@ pub fn build_dashboard(
 
     DashboardData {
         hourly: hour_histogram(Some(&today)),
+        hourly_active: active_hour_histogram(Some(&today)),
         today,
         apps,
         snapshot: build_live_snapshot(
@@ -332,6 +377,8 @@ pub struct ApplySample<'a> {
     pub sample: &'a oneboost_native::api::Sample,
     pub delta_ms: u64,
     pub day: &'a mut DayData,
+    /// Fallback timestamp for bucketing when the sample carries none.
+    pub now_ms: u64,
 }
 
 pub fn apply_sample_to_day(o: ApplySample) {
@@ -345,6 +392,19 @@ pub fn apply_sample_to_day(o: ApplySample) {
         day.active_ms += o.delta_ms;
     } else {
         day.idle_ms += o.delta_ms;
+    }
+    // Per-hour buckets, so "today" on the dashboard is the day as it actually
+    // happened rather than a flat block spread over the observed window. The
+    // bucket is chosen from the sample's own timestamp so it lines up with the
+    // day key the sample was filed under.
+    let hour = hour_of(if s.now_epoch_ms > 0 { s.now_epoch_ms } else { o.now_ms }) as usize;
+    if let Some(bucket) = day.hours.get_mut(hour) {
+        *bucket += o.delta_ms;
+    }
+    if s.input_active {
+        if let Some(bucket) = day.active_hours.get_mut(hour) {
+            *bucket += o.delta_ms;
+        }
     }
     if s.screen_on {
         day.screen_on_ms += o.delta_ms;
@@ -421,3 +481,112 @@ pub fn per_day_uses(data: &UsageData, key: &str) -> Vec<PerDayUse> {
 }
 
 // (day_key_from_ymd lives in util; no re-export needed)
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds a day from a list of (local hour, ms) buckets.
+    fn day_with_buckets(date: &str, buckets: &[(usize, u64, u64)]) -> DayData {
+        let mut day = DayData::empty(date.to_string(), 0);
+        for (hour, on, active) in buckets {
+            day.hours[*hour] = *on;
+            day.active_hours[*hour] = *active;
+            day.pc_on_ms += on;
+            day.active_ms += active;
+        }
+        day.idle_ms = day.pc_on_ms.saturating_sub(day.active_ms);
+        day
+    }
+
+    #[test]
+    fn the_today_histogram_uses_recorded_buckets() {
+        // The bug this fixes: a real day with a quiet morning and a busy
+        // afternoon drew as one flat block across every hour it touched.
+        let day = day_with_buckets(
+            "2026-09-30",
+            &[(9, 600_000, 600_000), (10, 1_800_000, 900_000), (11, 3_600_000, 1_800_000)],
+        );
+        let hist = hour_histogram(Some(&day));
+        assert_eq!(hist.len(), 24);
+        assert_eq!(hist[9], 600_000.0);
+        assert_eq!(hist[10], 1_800_000.0);
+        assert_eq!(hist[11], 3_600_000.0);
+        assert_eq!(hist[8], 0.0);
+        assert_eq!(hist[12], 0.0);
+        // Not flat any more: this is the shape the day actually had.
+        assert!(hist[11] > hist[10] && hist[10] > hist[9]);
+    }
+
+    #[test]
+    fn the_active_histogram_tracks_active_time_only() {
+        let day = day_with_buckets("2026-09-30", &[(9, 600_000, 0), (10, 600_000, 300_000)]);
+        let on = hour_histogram(Some(&day));
+        let active = active_hour_histogram(Some(&day));
+        assert_eq!(on[9], 600_000.0);
+        assert_eq!(active[9], 0.0);
+        assert_eq!(on[10], 600_000.0);
+        assert_eq!(active[10], 300_000.0);
+    }
+
+    #[test]
+    fn an_empty_day_is_all_zeroes_not_a_guess() {
+        let day = DayData::empty("2026-09-30".into(), 0);
+        assert!(hour_histogram(Some(&day)).iter().all(|v| *v == 0.0));
+        assert!(active_hour_histogram(Some(&day)).iter().all(|v| *v == 0.0));
+        // A day with no data at all must not crash the fallback either.
+        assert!(hour_histogram(None).iter().all(|v| *v == 0.0));
+    }
+
+    #[test]
+    fn days_recorded_before_1_3_1_still_render() {
+        // No buckets, but real totals — an upgrade must not blank the chart of
+        // every day already on disk.
+        let mut day = DayData::empty("2026-09-20".into(), 0);
+        day.pc_on_ms = 3 * 3_600_000;
+        day.active_ms = 2 * 3_600_000;
+        day.first_ms = 1_789_000_000_000;
+        day.last_ms = day.first_ms + 10 * 3_600_000;
+        let hist = hour_histogram(Some(&day));
+        assert_eq!(hist.len(), 24);
+        assert!(hist.iter().sum::<f64>() > 0.0, "legacy days still show something");
+        // The active series stays in proportion to the day's active share.
+        let active = active_hour_histogram(Some(&day));
+        assert_eq!(active.len(), 24);
+        assert!((active.iter().sum::<f64>() - hist.iter().sum::<f64>() * (2.0 / 3.0)).abs() < 1.0);
+    }
+
+    #[test]
+    fn a_broken_clock_cannot_hang_the_histogram() {
+        // last_ms far past a day boundary would loop from 23 to 24... forever
+        // if the walk were written naively.
+        let mut day = DayData::empty("2026-09-20".into(), 0);
+        day.pc_on_ms = 3_600_000;
+        day.first_ms = 1_789_000_000_000;
+        day.last_ms = day.first_ms + 400 * 86_400_000;
+        let hist = legacy_spread(&day);
+        assert_eq!(hist.len(), 24);
+        assert!(hist.iter().sum::<f64>() > 0.0);
+    }
+
+    #[test]
+    fn hour_of_stays_inside_the_day() {
+        for ms in [0u64, 1_000, 3_600_000, 86_399_000, 1_700_000_000_000] {
+            assert!(hour_of(ms) < 24, "hour_of({ms}) escaped the day");
+        }
+    }
+
+    #[test]
+    fn the_trend_window_is_zero_filled_and_ends_today() {
+        let mut data = UsageData::empty();
+        let now = 1_788_000_000_000u64;
+        let today = day_key(now);
+        data.days.insert(today.clone(), day_with_buckets(&today, &[(10, 3_600_000, 3_600_000)]));
+        let trend = daily_trend(&data, 7, now);
+        assert_eq!(trend.len(), 7);
+        assert_eq!(trend[6].date, today, "the last point is always today");
+        assert_eq!(trend[6].on_ms, 3_600_000);
+        // The six days before today have no data and must still be present.
+        assert!(trend[..6].iter().all(|p| p.on_ms == 0 && p.active_ms == 0));
+    }
+}

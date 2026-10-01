@@ -15,7 +15,7 @@ use crate::storage::Storage;
 use crate::util::{day_key, now_ms};
 use oneboost_native::api as native;
 use std::collections::BTreeMap;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -36,6 +36,11 @@ pub struct SharedTracker {
     pub storage: Mutex<Storage>,
     pub tracker: Mutex<TrackerState>,
     pub snapshot_tick: AtomicU64,
+    /// Epoch ms of the last sample that saw the user actually doing something.
+    /// The updater reads this to decide it is safe to restart the app without
+    /// interrupting anyone; `None` means "nothing seen yet", which is treated
+    /// as not idle.
+    pub last_active_ms: AtomicU64,
 }
 
 pub struct TrackerState {
@@ -79,7 +84,24 @@ impl SharedTracker {
             storage: Mutex::new(storage),
             tracker: Mutex::new(TrackerState::new()),
             snapshot_tick: AtomicU64::new(0),
+            last_active_ms: AtomicU64::new(0),
         }
+    }
+
+    /// Milliseconds since the user was last seen active, or `None` when no
+    /// active sample has been recorded yet. Saturating, so a clock that steps
+    /// backwards reads as "just now" rather than as a huge idle stretch.
+    pub fn idle_ms(&self) -> Option<u64> {
+        let last = self.last_active_ms.load(Ordering::Relaxed);
+        if last == 0 {
+            return None;
+        }
+        Some(crate::util::now_ms().saturating_sub(last))
+    }
+
+    /// Marks the user as active right now.
+    pub fn mark_active(&self, now_ms: u64) {
+        self.last_active_ms.store(now_ms, Ordering::Relaxed);
     }
 
     pub fn prefs(&self) -> Prefs {
@@ -206,9 +228,14 @@ impl SharedTracker {
         if account_delta > 0 && t.last_apply_ms.is_some() {
             let cur = t.current.take();
             if let Some(day) = storage.data.days.get_mut(&key) {
-                apply_sample_to_day(ApplySample { sample: &s, delta_ms: account_delta, day });
+                apply_sample_to_day(ApplySample { sample: &s, delta_ms: account_delta, day, now_ms: now });
             }
             accumulate_live_session(&mut storage.data, account_delta, s.input_active, now.saturating_sub(account_delta));
+            // Remember the last time the user was actually at the keyboard.
+            // The updater waits on this before restarting on its own.
+            if s.input_active {
+                self.mark_active(now);
+            }
             // Per-app usage only while actively present.
             if s.input_active {
                 if let Some(c) = cur.as_ref() {
@@ -523,8 +550,15 @@ impl SharedTracker {
     }
 
     pub fn trend(&self, days: i64) -> TrendData {
-        let n = days.clamp(7, 365);
         let storage = self.storage.lock().unwrap();
+        // Zero means "every day on record". Clamping that to a fixed window is
+        // what made the dashboard's All Time view quietly show less than all
+        // of it whenever retention was shorter than the clamp.
+        let n = if days <= 0 {
+            storage.data.days.len().max(1) as i64
+        } else {
+            days.clamp(1, 3650)
+        };
         let points = daily_trend(&storage.data, n, now_ms());
         let with_data: Vec<_> = points.iter().filter(|p| p.active_ms > 0).collect();
         let avg = if with_data.is_empty() {

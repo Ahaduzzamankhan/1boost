@@ -98,6 +98,17 @@ pub struct DayData {
     pub ac_ms: u64,
     #[serde(default)]
     pub focus_ms: u64,
+    /// PC-on milliseconds per local hour of this day (index = local hour).
+    /// Added in 1.3.1: without it the dashboard's "Today" view had to guess a
+    /// shape from the day's first/last sample, which drew a flat block that
+    /// never matched what the user was actually doing. Days recorded before
+    /// this field existed deserialize as all zeroes and fall back to the old
+    /// estimate, so old data files keep loading untouched.
+    #[serde(default)]
+    pub hours: [u64; 24],
+    /// Same buckets, counting only time the user was actually active.
+    #[serde(default)]
+    pub active_hours: [u64; 24],
     #[serde(default)]
     pub apps: BTreeMap<String, u64>,
 }
@@ -115,6 +126,8 @@ impl DayData {
             battery_ms: 0,
             ac_ms: 0,
             focus_ms: 0,
+            hours: [0; 24],
+            active_hours: [0; 24],
             apps: BTreeMap::new(),
         }
     }
@@ -260,6 +273,8 @@ pub struct DashboardData {
     pub today: DayData,
     pub apps: Vec<AppUsageItem>,
     pub hourly: Vec<f64>,
+    /// Same 24 buckets, active time only.
+    pub hourly_active: Vec<f64>,
     pub snapshot: LiveSnapshot,
     pub totals: Totals,
     pub daily: Vec<TrendPoint>,

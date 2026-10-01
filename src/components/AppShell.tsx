@@ -66,19 +66,39 @@ function useContextMenu() {
   return menu
 }
 
-/** Global "update ready" prompt: Restart now or Later. */
+/**
+ * Global "update ready" prompt: restart now, or later.
+ *
+ * Deliberately its own black surface rather than a themed modal: this one
+ * interrupts, and it should look the same on every theme so it reads as the
+ * app speaking rather than as part of whatever the user was looking at. It
+ * also explains the idle restart, because silently restarting someone's
+ * machine an hour later is the sort of thing that erodes trust in an updater.
+ */
 function UpdatePrompt({ update }: { update: UpdateState | null }) {
   const [dismissed, setDismissed] = useState<string | null>(null)
-  const open = update?.status === 'ready' && dismissed !== update.availableVersion
+  const [restarting, setRestarting] = useState(false)
+  const version = update?.availableVersion ?? ''
+  const open = update?.status === 'ready' && dismissed !== version
   if (!open) return null
+
+  const restart = async () => {
+    setRestarting(true)
+    try {
+      await bridge.installUpdate()
+    } catch {
+      setRestarting(false)
+    }
+  }
+
   return (
-    <div className="modal-overlay" style={{ zIndex: 400 }}>
+    <div className="update-pop" style={{ zIndex: 400 }}>
       <div
         className="modal"
         role="alertdialog"
         aria-modal="true"
         aria-label="Update ready"
-        style={{ width: 'min(420px, calc(100vw - 48px))' }}
+        style={{ width: 'min(400px, calc(100vw - 48px))' }}
       >
         <div className="modal-head">
           <div
@@ -90,25 +110,31 @@ function UpdatePrompt({ update }: { update: UpdateState | null }) {
           <button
             className="btn btn-ghost"
             aria-label="Later"
-            onClick={() => setDismissed(update!.availableVersion ?? 'ready')}
+            onClick={() => setDismissed(version || 'ready')}
           >
             <X size={18} />
           </button>
         </div>
         <div className="modal-body">
           <p style={{ color: 'var(--text-secondary)', fontSize: 13.5, lineHeight: 1.55 }}>
-            Version <b style={{ color: 'var(--text-primary)' }}>{update!.availableVersion ?? ''}</b>{' '}
-            has been downloaded and will install the next time 1Boost restarts.
+            <b style={{ color: 'var(--text-primary)' }}>1Boost {version}</b> has been downloaded
+            and verified.
+          </p>
+          <p style={{ color: 'var(--text-muted)', fontSize: 12.5, lineHeight: 1.5, marginTop: 8 }}>
+            Restart whenever you like — or leave it and 1Boost will restart on its own once you
+            have been away from the keyboard for a few minutes.
           </p>
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 18 }}>
             <button
               className="btn btn-secondary"
-              onClick={() => setDismissed(update!.availableVersion ?? 'ready')}
+              onClick={() => setDismissed(version || 'ready')}
+              disabled={restarting}
             >
               <ClockIcon size={15} /> Later
             </button>
-            <button className="btn btn-primary" onClick={() => void bridge.installUpdate()}>
-              <RefreshCw size={15} /> Restart now
+            <button className="btn btn-primary" onClick={() => void restart()} disabled={restarting}>
+              <RefreshCw size={15} className={restarting ? 'spin' : undefined} />
+              {restarting ? 'Restarting…' : 'Restart now'}
             </button>
           </div>
         </div>
@@ -260,9 +286,10 @@ function Shell({
 
   // Follow the module when something navigates from outside the sidebar
   // (tray menu, search hit, quick capture) so the workspace never lies.
+  // Footer entries (Settings) have no workspace and must not change it.
   useEffect(() => {
     const def = moduleById(page)
-    if (def) setWorkspace(def.workspace)
+    if (def?.workspace) setWorkspace(def.workspace)
   }, [page])
 
   const navItems = useMemo(() => modulesIn(workspace), [workspace])

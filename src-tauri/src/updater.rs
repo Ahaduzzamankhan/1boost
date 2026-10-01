@@ -26,7 +26,7 @@ use serde::Serialize;
 use std::io::Read;
 use std::io::Write;
 use std::sync::Mutex;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tauri_plugin_updater::UpdaterExt;
 
 const REPO_OWNER: &str = "Ahaduzzamankhan";
@@ -144,13 +144,7 @@ async fn do_check(app: &AppHandle) -> UpdateStatePayload {
                         log::info!("delta update to {version} rebuilt from the cached payload");
                         // Cache the result so the next update can delta again.
                         payload::store(app, &artifact.version, &artifact.bytes);
-                        if let Ok(mut g) = PENDING.lock() {
-                            *g = Some(PendingUpdate {
-                                version: version.clone(),
-                                bytes: artifact.bytes,
-                                mode: Mode::Delta,
-                            });
-                        }
+                        stage_pending(&version, artifact.bytes, Mode::Delta);
                         let s = state_payload(
                             "ready",
                             Some(version),
@@ -212,15 +206,9 @@ async fn do_check(app: &AppHandle) -> UpdateStatePayload {
                     // these bytes over, so caching them as a future delta base is
                     // safe.
                     payload::store(app, &version, &bytes);
-                    // Cache the downloaded artifact so install_update() can
-                    // install it without a second download.
-                    if let Ok(mut g) = PENDING.lock() {
-                        *g = Some(PendingUpdate {
-                            version: version.clone(),
-                            bytes,
-                            mode: Mode::Full,
-                        });
-                    }
+                    // Stage the verified artifact so install_update() can apply
+                    // it without a second download.
+                    stage_pending(&version, bytes, Mode::Full);
                     let s = state_payload(
                         "ready",
                         Some(version),
@@ -258,13 +246,115 @@ struct PendingUpdate {
     version: String,
     bytes: Vec<u8>,
     mode: Mode,
+    /// SHA-256 of `bytes`, taken the moment the download was verified. The
+    /// artifact is re-hashed immediately before it is handed to the installer,
+    /// so anything that touches the bytes in between is caught rather than
+    /// executed.
+    digest: [u8; 32],
 }
 
 static PENDING: Mutex<Option<PendingUpdate>> = Mutex::new(None);
 
+/// Set while a check/download is running. The 5-minute tick, the startup
+/// check and a manual "Check now" from Settings can otherwise overlap and
+/// start two downloads of the same release.
+static IN_FLIGHT: Mutex<bool> = Mutex::new(false);
+
+/// Epoch ms before which no new check is attempted, set after a failure so an
+/// offline machine retries on a backoff instead of every five minutes forever.
+static BACKOFF_UNTIL_MS: Mutex<u64> = Mutex::new(0);
+
+/// Consecutive failures, used to widen the backoff. Capped.
+static FAILURE_STREAK: Mutex<u32> = Mutex::new(0);
+
+/// True once an install has been handed to the installer. Nothing may start
+/// another update afterwards: the app is on its way down, and a second check
+/// landing in that window is how update loops happen.
+static INSTALL_STARTED: Mutex<bool> = Mutex::new(false);
+
+/// How long the user must have been idle before an update is applied without
+/// being asked. Deliberately long: restarting someone's machine while they
+/// are mid-thought is worse than restarting it five minutes later.
+const IDLE_APPLY_MS: u64 = 10 * 60_000;
+
+/// First backoff after a failure, doubled per consecutive failure, capped.
+const BACKOFF_BASE_MS: u64 = 5 * 60_000;
+const BACKOFF_MAX_MS: u64 = 60 * 60_000;
+
+fn backoff_until_ms() -> u64 {
+    *BACKOFF_UNTIL_MS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn note_failure() {
+    let mut streak = FAILURE_STREAK.lock().unwrap_or_else(|e| e.into_inner());
+    *streak += 1;
+    let shift = (*streak).saturating_sub(1).min(4);
+    let wait = BACKOFF_BASE_MS.saturating_mul(1u64 << shift).min(BACKOFF_MAX_MS);
+    *BACKOFF_UNTIL_MS.lock().unwrap_or_else(|e| e.into_inner()) = crate::util::now_ms() + wait;
+    log::warn!("[1boost] update check failed; next attempt in {wait / 1000}s");
+}
+
+fn note_success() {
+    *FAILURE_STREAK.lock().unwrap_or_else(|e| e.into_inner()) = 0;
+    *BACKOFF_UNTIL_MS.lock().unwrap_or_else(|e| e.into_inner()) = 0;
+}
+
+fn install_started() -> bool {
+    *INSTALL_STARTED.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Re-hashes the staged artifact and confirms it is still the bytes we
+/// verified at download time.
+fn pending_is_intact(p: &PendingUpdate) -> bool {
+    crate::delta::sha256(&p.bytes) == p.digest
+}
+
+/// Replaces the staged update. Returns false when the new artifact is for a
+/// version we already staged, which keeps repeated checks from re-downloading
+/// (and re-verifying) an update the user has simply not restarted yet.
+fn stage_pending(version: &str, bytes: Vec<u8>, mode: Mode) -> bool {
+    let mut guard = PENDING.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(existing) = guard.as_ref() {
+        if existing.version == version {
+            return false;
+        }
+    }
+    *guard = Some(PendingUpdate {
+        version: version.to_string(),
+        digest: crate::delta::sha256(&bytes),
+        bytes,
+        mode,
+    });
+    true
+}
+
+fn pending_version() -> Option<String> {
+    PENDING.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|p| p.version.clone())
+}
+
+/// The state the UI asks for on load.
+///
+/// A staged update outlives the page that was open when it downloaded, so
+/// this has to report the truth rather than a fixed "idle": opening Settings
+/// minutes later must still say an update is ready, or the user is told to
+/// wait for something that has already finished.
 pub async fn update_state(_app: &AppHandle) -> UpdateStatePayload {
-    // Non-mutating snapshot: the UI polls this on load.
-    state_payload("idle", None, None, None, None, None, None)
+    let guard = PENDING.lock().unwrap_or_else(|e| e.into_inner());
+    match guard.as_ref() {
+        Some(p) => {
+            let intact = pending_is_intact(p);
+            state_payload(
+                if intact { "ready" } else { "error" },
+                Some(p.version.clone()),
+                if intact { Some(100.0) } else { None },
+                None,
+                None,
+                if intact { None } else { Some("the downloaded update no longer matches what was verified".into()) },
+                Some(p.mode),
+            )
+        }
+        None => state_payload("idle", None, None, None, None, None, None),
+    }
 }
 
 /// True when a release manifest version is newer than the running build.
@@ -274,36 +364,118 @@ fn is_newer(candidate: &str, current: &str) -> bool {
 }
 
 pub async fn check_updates(app: &AppHandle) -> UpdateStatePayload {
-    do_check(app).await
+    // A manual "Check now" from Settings must not race the background tick.
+    let mut in_flight = IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner());
+    if *in_flight {
+        return state_payload("checking", None, None, None, None, None, None);
+    }
+    *in_flight = true;
+    drop(in_flight);
+    let result = do_check(app).await;
+    *IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner()) = false;
+    result
 }
 
+/// Applies a staged update, re-verifying the artifact on the way in.
+///
+/// Verification happens twice on purpose. The signature is checked when the
+/// bytes are downloaded (by the plugin, or by the delta chain), and then the
+/// artifact is re-hashed here against the digest recorded at that moment. A
+/// truncated cache write, a half-flushed file or anything else that touches
+/// the staged bytes between download and install is caught before the
+/// installer ever sees them.
 pub async fn install_update(app: &AppHandle) -> bool {
+    if install_started() {
+        return false;
+    }
     let updater = match app.updater() {
         Ok(u) => u,
         Err(_) => return false,
     };
     // Check again so the Update object matches the live feed.
-    match updater.check().await {
-        Ok(Some(update)) => {
-            let pending = PENDING.lock().ok().and_then(|g| g.clone());
-            let bytes = match pending {
-                Some(p) if p.version == update.version => Ok(p.bytes),
-                // Background download never completed — fetch now. The plugin
-                // verifies this one's signature on the way in.
-                _ => update.download(|_, _| {}, || {}).await,
-            };
-            match bytes {
-                // install() replaces the binary and relaunches (NSIS);
-                // ExitRequested stops the tracker via RunEvent handling.
-                Ok(b) => {
-                    let _ = update.install(&b);
-                    true
-                }
-                Err(_) => false,
+    let update = match updater.check().await {
+        Ok(Some(u)) => u,
+        _ => return false,
+    };
+
+    let staged = PENDING.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let bytes = match staged {
+        Some(p) if p.version == update.version => {
+            if !pending_is_intact(&p) {
+                log::error!("[1boost] staged update {} failed its integrity check", p.version);
+                // Drop it rather than leaving a corrupt artifact to be retried.
+                *PENDING.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                return false;
             }
+            // A verified updater artifact is a zip containing the installer.
+            if extract_installer(&p.bytes).is_none() {
+                log::error!("[1boost] staged update {} is not an installer archive", p.version);
+                *PENDING.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                return false;
+            }
+            Ok(p.bytes)
         }
-        _ => false,
+        // Background download never completed — fetch now. The plugin
+        // verifies this one's signature on the way in.
+        _ => update.download(|_, _| {}, || {}).await,
+    };
+
+    let bytes = match bytes {
+        Ok(b) => b,
+        Err(e) => {
+            log::warn!("[1boost] could not fetch the update to install: {e}");
+            return false;
+        }
+    };
+
+    // From here the app is committed to restarting. Mark it before handing
+    // control to the installer so a concurrent timer tick cannot start a
+    // second update on the way out.
+    *INSTALL_STARTED.lock().unwrap_or_else(|e| e.into_inner()) = true;
+    // install() replaces the binary and relaunches (NSIS).
+    match update.install(&bytes) {
+        Ok(()) => true,
+        Err(e) => {
+            // The installer refused. Let the app carry on and try again later
+            // rather than exiting into a half-applied state.
+            log::error!("[1boost] the installer refused the update: {e}");
+            *INSTALL_STARTED.lock().unwrap_or_else(|e| e.into_inner()) = false;
+            false
+        }
     }
+}
+
+/// Applies a staged update without being asked, once the machine has been
+/// idle long enough that restarting cannot interrupt anyone.
+///
+/// Returns true when an install was started.
+pub async fn auto_apply_if_idle(app: &AppHandle) -> bool {
+    if install_started() {
+        return false;
+    }
+    // The tracker lives inside AppState as an Arc, not as a directly managed
+    // state type.
+    let idle = app.state::<crate::AppState>().tracker.idle_ms();
+    // Never apply before the user has had a fair chance to see the prompt,
+    // and never while the window is in front of them.
+    let Some(idle) = idle else { return false };
+    if idle < IDLE_APPLY_MS {
+        return false;
+    }
+    let window_in_front = app
+        .get_webview_window("main")
+        .and_then(|w| w.is_visible().ok())
+        .unwrap_or(false)
+        && app
+            .get_webview_window("main")
+            .and_then(|w| w.is_focused().ok())
+            .unwrap_or(false);
+    if window_in_front {
+        return false;
+    }
+    let Some(version) = pending_version() else { return false };
+    log::info!("[1boost] idle for {}ms; applying the staged update to {version}", idle);
+    install_update(app).await
 }
 
 /// Reinstalls the newest cached payload older than the running build.
@@ -357,6 +529,11 @@ fn extract_installer(bytes: &[u8]) -> Option<Vec<u8>> {
     None
 }
 
+/// The background updater loop.
+///
+/// One thread, one job at a time. Every tick either checks for a release (if
+/// no failure backoff is active) or, if an update is already staged, decides
+/// whether the machine has been idle long enough to restart on its own.
 pub fn init_background(app: AppHandle) {
     if cfg!(debug_assertions) || std::env::var("ONEBOOST_NO_UPDATER").as_deref() == Ok("1") {
         return;
@@ -364,22 +541,51 @@ pub fn init_background(app: AppHandle) {
     std::thread::spawn(move || {
         // Small delay so first paint isn't competing with the update check.
         std::thread::sleep(std::time::Duration::from_millis(STARTUP_DELAY_MS));
-        let h = app.clone();
-        tauri::async_runtime::spawn(async move {
-            do_check(&h).await;
-        });
         loop {
+            let now = crate::util::now_ms();
+            let due = now >= backoff_until_ms();
+            if due && !install_started() {
+                let mut in_flight = IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner());
+                if !*in_flight {
+                    *in_flight = true;
+                    drop(in_flight);
+                    let h = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let state = do_check(&h).await;
+                        // Every terminal outcome resets the backoff, so a
+                        // recovered network is picked up on the next tick.
+                        if state.status == "error" {
+                            note_failure();
+                        } else {
+                            note_success();
+                        }
+                        *IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner()) = false;
+                    });
+                }
+            } else if !due {
+                log::debug!("[1boost] update check backing off until {backoff_until_ms}", backoff_until_ms = backoff_until_ms());
+            }
+
+            // A staged update waits for the user — until they are idle.
+            let staged = pending_version();
+            if staged.is_some() {
+                let h = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    auto_apply_if_idle(&h).await;
+                });
+            }
+
             std::thread::sleep(std::time::Duration::from_millis(RECHECK_MS));
-            let h = app.clone();
-            tauri::async_runtime::spawn(async move {
-                do_check(&h).await;
-            });
         }
     });
 }
 
 const STARTUP_DELAY_MS: u64 = 15_000;
-const RECHECK_MS: u64 = 6 * 60 * 60_000;
+
+/// How often the updater looks for a new release. Five minutes is frequent
+/// enough that an update lands while the app is still open, and cheap enough
+/// (a signed manifest fetch) that it is not worth being cleverer.
+const RECHECK_MS: u64 = 5 * 60_000;
 
 // Repo constants kept for the manifest generator + diagnostics.
 pub const REPO: (&str, &str) = (REPO_OWNER, REPO_NAME);
@@ -427,5 +633,80 @@ mod tests {
         let target = include_bytes!("delta_fixtures/target.bin");
         let patch = include_bytes!("delta_fixtures/patch.1bdelta");
         assert_eq!(delta::rebuild(patch, base).unwrap(), target);
+    }
+
+    /// These tests share the process-wide PENDING slot, so they take a lock of
+    /// their own rather than running against each other.
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn with_pending<T>(f: impl FnOnce() -> T) -> T {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let result = f();
+        *PENDING.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *INSTALL_STARTED.lock().unwrap_or_else(|e| e.into_inner()) = false;
+        result
+    }
+
+    #[test]
+    fn staging_the_same_version_twice_does_not_redownload() {
+        with_pending(|| {
+            assert!(stage_pending("1.3.2", vec![1, 2, 3], Mode::Full));
+            // A second check five minutes later must not fetch the same bytes.
+            assert!(!stage_pending("1.3.2", vec![9, 9, 9], Mode::Full));
+            assert_eq!(pending_version().as_deref(), Some("1.3.2"));
+            // A genuinely newer release does replace it.
+            assert!(stage_pending("1.3.3", vec![4, 5, 6], Mode::Delta));
+            assert_eq!(pending_version().as_deref(), Some("1.3.3"));
+        });
+    }
+
+    #[test]
+    fn a_staged_update_that_changes_is_caught_before_installing() {
+        with_pending(|| {
+            stage_pending("1.3.2", vec![1, 2, 3, 4], Mode::Full);
+            let staged = PENDING.lock().unwrap_or_else(|e| e.into_inner()).clone().unwrap();
+            assert!(pending_is_intact(&staged));
+            // Anything that touches the staged bytes after verification fails.
+            let mut tampered = staged.clone();
+            tampered.bytes[0] ^= 0xff;
+            assert!(!pending_is_intact(&tampered));
+            let mut truncated = staged.clone();
+            truncated.bytes.pop();
+            assert!(!pending_is_intact(&truncated));
+        });
+    }
+
+    #[test]
+    fn backoff_widens_then_resets() {
+        let _guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        *FAILURE_STREAK.lock().unwrap_or_else(|e| e.into_inner()) = 0;
+        *BACKOFF_UNTIL_MS.lock().unwrap_or_else(|e| e.into_inner()) = 0;
+        assert_eq!(backoff_until_ms(), 0, "a healthy machine starts with no wait");
+
+        note_failure();
+        let first = backoff_until_ms().saturating_sub(crate::util::now_ms());
+        assert!(first > 0 && first <= BACKOFF_MAX_MS);
+
+        note_failure();
+        let second = backoff_until_ms().saturating_sub(crate::util::now_ms());
+        assert!(second >= first, "repeated failures wait longer than the first");
+
+        for _ in 0..10 {
+            note_failure();
+        }
+        assert!(
+            backoff_until_ms().saturating_sub(crate::util::now_ms()) <= BACKOFF_MAX_MS,
+            "the backoff is capped so an outage cannot park the updater forever"
+        );
+
+        note_success();
+        assert_eq!(backoff_until_ms(), 0);
+        *FAILURE_STREAK.lock().unwrap_or_else(|e| e.into_inner()) = 0;
+    }
+
+    #[test]
+    fn the_idle_threshold_is_long_enough_to_be_safe() {
+        // Restarting while someone is typing is the failure this guards.
+        assert!(IDLE_APPLY_MS >= 5 * 60_000, "wait at least five idle minutes");
     }
 }

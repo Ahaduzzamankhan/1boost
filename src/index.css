@@ -377,6 +377,79 @@ button:focus-visible,
   letter-spacing: -0.02em;
 }
 
+/* One heading for every module, so the vertical rhythm off the top of a page
+   is identical wherever the user lands. */
+.page-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-bottom: var(--space-6);
+}
+
+.page-header-text {
+  min-width: 0;
+}
+
+.page-header-action {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* An inline fact. Deliberately not a `.card`: nesting a bordered box inside a
+   bordered box is the main thing that made the denser pages feel busy. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.chip b {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.chip svg {
+  flex-shrink: 0;
+}
+
+.chip-good {
+  border-color: color-mix(in srgb, #22c55e 40%, transparent);
+  color: var(--text-primary);
+}
+
+.chip-warn {
+  border-color: color-mix(in srgb, #f59e0b 45%, transparent);
+  color: var(--text-primary);
+}
+
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-5);
+}
+
+/* An empty chart keeps its frame and says why it is empty, instead of
+   collapsing and leaving a hole in the page. */
+.chart-empty-note {
+  padding: var(--space-8) var(--space-4);
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-muted);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+}
+
 .page-subtitle {
   color: var(--text-secondary);
   margin-top: 2px;
@@ -847,6 +920,54 @@ button:focus-visible,
   margin-top: 1px;
 }
 
+/* Inline result line under a setting row. Buttons that quietly did nothing
+   used to be the single most reported complaint about this app, so anything
+   a setting does now says so out loud. */
+.setting-note {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  animation: noteIn 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.setting-note .grow {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.setting-note.ok {
+  border-color: color-mix(in srgb, #22c55e 42%, transparent);
+  background: color-mix(in srgb, #22c55e 10%, transparent);
+  color: var(--text-primary);
+}
+
+.setting-note.bad {
+  border-color: color-mix(in srgb, #ef4444 45%, transparent);
+  background: color-mix(in srgb, #ef4444 10%, transparent);
+  color: var(--text-primary);
+}
+
+.setting-note .muted {
+  color: var(--text-muted);
+}
+
+@keyframes noteIn {
+  from {
+    opacity: 0;
+    background-color: var(--accent-soft);
+  }
+  to {
+    opacity: 1;
+  }
+}
+
 .theme-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
@@ -984,6 +1105,27 @@ button:focus-visible,
   place-items: center;
   z-index: 100;
   animation: fadeIn 160ms var(--ease) both;
+}
+
+/* The update prompt is the one dialog that interrupts, so it gets its own
+   near-opaque black surface instead of the theme's translucent panel: it must
+   read as the app speaking, identically on every theme, rather than as part
+   of whatever the user happened to be looking at. */
+.update-pop {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.62);
+  z-index: 100;
+  animation: fadeIn 160ms var(--ease) both;
+}
+
+.update-pop .modal {
+  background: #08090c;
+  border-color: rgba(255, 255, 255, 0.14);
+  color-scheme: dark;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.7);
 }
 
 @keyframes fadeIn {
@@ -1233,6 +1375,203 @@ kbd {
   to { transform: rotate(360deg); }
 }
 
+/* ============================================================
+   Motion & depth
+   ============================================================ */
+/* One rule governs this whole section, and it was learned the hard way on
+   the transparent Windows themes: `transform`, `filter` and `will-change`
+   promote an element to its own compositor layer, and a promoted layer
+   sitting above the window-level backdrop-filter tears — ghosted frames,
+   frozen animations. That is why `.page` above fades instead of sliding.
+
+   So everything here is opacity, colour or shadow, and only small controls
+   (buttons, dots, chips) ever translate. The blanket reduced-motion rules
+   further down neutralise all of it when the user asks for less motion, so
+   nothing in this section needs its own opt-out. */
+
+/* A soft accent wash behind the whole app, in the user's accent colour.
+   It sits in the app's own background rather than a pseudo-element: a
+   positioned overlay would paint on top of the content, and animating a
+   background position here would repaint the backdrop-filtered root on
+   every frame. */
+.app {
+  background-image:
+    radial-gradient(58vw 46vw at 8% -8%, var(--accent-soft), transparent 70%),
+    radial-gradient(48vw 40vw at 104% 112%, var(--accent-soft), transparent 68%);
+}
+
+/* The tracking indicator breathes while it is live, and holds still when
+   paused — so the tray dot, the sidebar dot and this one all read the same
+   way at a glance. */
+.status-dot {
+  animation: statusBreath 2.4s ease-in-out infinite;
+  box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.5);
+}
+
+.status-dot.paused {
+  animation: none;
+  box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.5);
+}
+
+@keyframes statusBreath {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.45);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(34, 197, 94, 0);
+  }
+}
+
+/* Cards gain depth on hover through shadow and border, not movement. */
+.card {
+  transition: box-shadow var(--transition-normal) var(--ease),
+    border-color var(--transition-normal) var(--ease),
+    background-color var(--transition-normal) var(--ease);
+}
+
+.card:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-card);
+}
+
+/* Metric tiles cascade in with the page. Opacity and background only —
+   see the note at the top of this section. */
+.grid-metrics > .card {
+  animation: tileIn 320ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.grid-metrics > .card:nth-child(1) { animation-delay: 0ms; }
+.grid-metrics > .card:nth-child(2) { animation-delay: 45ms; }
+.grid-metrics > .card:nth-child(3) { animation-delay: 90ms; }
+.grid-metrics > .card:nth-child(4) { animation-delay: 135ms; }
+
+@keyframes tileIn {
+  from {
+    opacity: 0;
+    background-color: var(--accent-soft);
+  }
+  to {
+    opacity: 1;
+    background-color: var(--surface);
+  }
+}
+
+/* Lists cascade the same way; the first dozen rows stagger, then the rest
+   arrive together so a 500-row clipboard history costs nothing. */
+.row-list > * {
+  animation: rowIn 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.row-list > *:nth-child(1) { animation-delay: 0ms; }
+.row-list > *:nth-child(2) { animation-delay: 30ms; }
+.row-list > *:nth-child(3) { animation-delay: 60ms; }
+.row-list > *:nth-child(4) { animation-delay: 90ms; }
+.row-list > *:nth-child(5) { animation-delay: 120ms; }
+.row-list > *:nth-child(6) { animation-delay: 150ms; }
+.row-list > *:nth-child(7) { animation-delay: 180ms; }
+.row-list > *:nth-child(8) { animation-delay: 210ms; }
+.row-list > *:nth-child(n + 9) { animation-delay: 240ms; }
+
+@keyframes rowIn {
+  from {
+    opacity: 0;
+    background-color: var(--accent-soft);
+  }
+  to {
+    opacity: 1;
+    background-color: transparent;
+  }
+}
+
+/* A gradient on the page title, and an accent rule that draws itself under
+   each section heading. */
+.page-title {
+  background: linear-gradient(96deg, var(--text-primary) 30%, var(--accent) 130%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.section-title {
+  position: relative;
+  padding-bottom: var(--space-2);
+}
+
+.section-title::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  width: 34px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--accent), transparent);
+  animation: ruleIn 520ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes ruleIn {
+  from { width: 0; opacity: 0; }
+  to { width: 34px; opacity: 1; }
+}
+
+/* The primary action carries its colour into the glow around it, so the
+   eye finds the one button that matters on a screen. */
+.btn-primary {
+  transition: background var(--transition-fast) var(--ease), color var(--transition-fast) var(--ease),
+    box-shadow var(--transition-normal) var(--ease), transform var(--transition-fast) var(--ease);
+}
+
+.btn-primary:hover {
+  box-shadow: 0 4px 18px var(--accent-soft);
+}
+
+.btn-primary:active {
+  transform: scale(0.97);
+}
+
+/* Focus rings on the inputs that take real typing. */
+input,
+textarea,
+button {
+  transition: border-color var(--transition-fast) var(--ease),
+    box-shadow var(--transition-fast) var(--ease), background-color var(--transition-fast) var(--ease),
+    color var(--transition-fast) var(--ease);
+}
+
+input:focus-visible,
+textarea:focus-visible,
+.search-box:focus-within,
+.capture-input:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* The active nav item keeps a small accent bar that slides down the rail
+   rather than jumping. */
+.nav-item {
+  position: relative;
+}
+
+.nav-item.active::before {
+  content: '';
+  position: absolute;
+  left: -6px;
+  top: 50%;
+  width: 3px;
+  height: 18px;
+  margin-top: -9px;
+  border-radius: 3px;
+  background: var(--accent);
+  animation: navBarIn 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes navBarIn {
+  from { height: 0; margin-top: 0; opacity: 0; }
+  to { height: 18px; margin-top: -9px; opacity: 1; }
+}
+
 /* Reduced motion */
 :root[data-reduced-motion='true'] *,
 :root[data-reduced-motion='true'] *::before,
@@ -1253,6 +1592,12 @@ kbd {
 }
 
 /* Small widths */
+@media (max-width: 1180px) {
+  .grid-metrics {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
 @media (max-width: 1000px) {
   .content {
     padding: var(--space-6) var(--space-6);
@@ -1263,7 +1608,10 @@ kbd {
   }
   .sidebar-brand .brand-name,
   .nav-item span,
-  .sidebar-status .status-text {
+  .sidebar-status .status-text,
+  .workspace-label,
+  .workspace-blurb,
+  .nav-kbd {
     display: none;
   }
   .nav-item {
@@ -1277,6 +1625,18 @@ kbd {
   .sidebar-status {
     justify-content: center;
   }
+  /* The active-marker bar belongs to the label, which is gone at this width,
+     so it would sit orphaned on the icon. */
+  .nav-item.active::before {
+    display: none;
+  }
+  .nav-item.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+  .workspace-picker {
+    display: none;
+  }
 }
 
 @media (max-width: 760px) {
@@ -1285,5 +1645,8 @@ kbd {
   }
   .content {
     padding: var(--space-4);
+  }
+  .chip {
+    white-space: normal;
   }
 }

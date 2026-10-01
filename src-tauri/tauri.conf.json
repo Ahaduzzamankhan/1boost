@@ -13,10 +13,6 @@
     "windows": [],
     "security": {
       "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://api.github.com https://github.com https://objects.githubusercontent.com ipc: http://ipc.localhost"
-    },
-    "trayIcon": {
-      "iconPath": "icons/tray.png",
-      "iconAsTemplate": false
     }
   },
   "bundle": {

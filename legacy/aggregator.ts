@@ -150,17 +150,35 @@ export function dailyTrend(data: UsageData, days: number, nowMs: number): TrendP
 }
 
 export function hourHistogram(day: DayData | undefined): number[] {
-  // Proportional split across the observed window (firstMs..lastMs).
+  // Recorded buckets first (1.3.1+); legacy days fall back to the proportional
+  // split across the observed window.
   const out = new Array(24).fill(0)
-  if (!day || day.pcOnMs <= 0 || day.lastMs <= day.firstMs) return out
+  if (!day || day.pcOnMs <= 0) return out
+  if (day.hours?.some((ms) => ms > 0)) return [...day.hours]
+  return legacySpread(day)
+}
+
+export function activeHourHistogram(day: DayData | undefined): number[] {
+  const out = new Array(24).fill(0)
+  if (!day || day.activeMs <= 0) return out
+  if (day.activeHours?.some((ms) => ms > 0)) return [...day.activeHours]
+  const share = Math.min(1, day.activeMs / day.pcOnMs)
+  return hourHistogram(day).map((v) => v * share)
+}
+
+/** Days recorded before per-hour tracking existed. */
+function legacySpread(day: DayData): number[] {
+  const out = new Array(24).fill(0)
+  if (day.lastMs <= day.firstMs) return out
   const span = day.lastMs - day.firstMs
-  const clamped = Math.min(day.pcOnMs, span)
-  const perHour = clamped / span
-  const start = new Date(day.firstMs)
-  const end = new Date(day.lastMs)
-  for (let h = start.getHours(); h <= end.getHours(); h++) {
-    const idx = h % 24
-    out[idx] += perHour
+  const perHour = Math.min(day.pcOnMs, span) / span
+  const start = new Date(day.firstMs).getHours()
+  const end = new Date(day.lastMs).getHours()
+  let h = start
+  for (;;) {
+    out[h % 24] += perHour
+    if (h === end || h > start + 48) break
+    h += 1
   }
   return out
 }
@@ -299,6 +317,7 @@ export function buildDashboard(
     today,
     apps,
     hourly: hourHistogram(today),
+    hourlyActive: activeHourHistogram(today),
     snapshot: buildLiveSnapshot(data, today, {
       nowMs: opts.nowMs,
       paused: opts.paused,

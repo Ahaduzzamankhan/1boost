@@ -1,25 +1,52 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Clock, Activity, Coffee, Grid2X2, ChevronRight, PauseCircle, Expand, BatteryFull, BatteryCharging, AlertCircle } from 'lucide-react'
 import type { TrendPoint } from '../../shared/types'
 import { useDashboard } from '../state'
 import { bridge } from '../bridge'
 import { formatDuration, formatDayRelative } from '../lib/format'
-import { TrendChart } from '../components/charts'
-import { AppIcon, Bar, EmptyState, Segmented } from '../components/ui'
+import { HourChart, TrendChart } from '../components/charts'
+import { AppIcon, Bar, Chip, EmptyState, PageHeader, Segmented } from '../components/ui'
 
 type Range = 'today' | '7d' | '30d' | 'all'
+
+/** Days each range asks the backend for. `all` means "every day on record". */
+const RANGE_DAYS: Record<Exclude<Range, 'today'>, number> = { '7d': 7, '30d': 30, all: 0 }
 
 export default function DashboardPage() {
   const { dashboard, snapshot } = useDashboard(null)
   const [range, setRange] = useState<Range>('7d')
+  const [trend, setTrend] = useState<TrendPoint[] | null>(null)
 
-  const points = useMemo<TrendPoint[]>(() => {
+  // Ask the backend for exactly the window that was chosen. Slicing the
+  // dashboard payload capped the chart at whatever the retention pref
+  // happened to be, so "All Time" silently showed less than all of it.
+  const loadTrend = useCallback(async (r: Range) => {
+    if (r === 'today') {
+      setTrend(null)
+      return
+    }
+    try {
+      const data = await bridge.getTrend(RANGE_DAYS[r])
+      setTrend(data.points)
+    } catch {
+      setTrend(null)
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadTrend(range)
+    // Re-pull when the day advances: `lastMs` moves with every recorded
+    // sample, so this fires exactly when the window behind the chart changed.
+  }, [range, loadTrend, dashboard?.today?.lastMs])
+
+  const fallbackPoints = useMemo<TrendPoint[]>(() => {
     const daily = dashboard?.daily ?? []
-    if (range === 'today') return daily.slice(-1)
     if (range === '7d') return daily.slice(-7)
     if (range === '30d') return daily.slice(-30)
     return daily
   }, [dashboard, range])
+
+  const points = trend ?? fallbackPoints
 
   const greeting = useMemo(() => {
     const h = new Date().getHours()
@@ -29,28 +56,31 @@ export default function DashboardPage() {
     return 'Good evening'
   }, [])
 
-  const totalAppMs = (dashboard?.today?.apps
-    ? dashboard.apps.reduce((a, b) => a + b.ms, 0)
-    : 0)
+  const totalAppMs = useMemo(
+    () => (dashboard?.apps ?? []).reduce((sum, app) => sum + app.ms, 0),
+    [dashboard],
+  )
 
   const apps = dashboard?.apps ?? []
 
   if (!dashboard) return null
 
+  // Live edge: the hourly view is the one place that benefits from a clock of
+  // its own, because the payload only refreshes when usage is written.
+
   return (
     <div className="page">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 12 }}>
-        <div>
-          <h1 className="page-title">{greeting}</h1>
-          <p className="page-subtitle">Your PC usage today</p>
-        </div>
-        {snapshot?.paused ? (
-          <div className="card" style={{ padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 8 }}>
-            <PauseCircle size={16} color="#f59e0b" />
-            <span style={{ fontSize: 13 }}>Tracking paused</span>
-          </div>
-        ) : null}
-      </div>
+      <PageHeader
+        title={greeting}
+        subtitle="Your PC usage today"
+        action={
+          snapshot?.paused ? (
+            <Chip tone="warn" icon={<PauseCircle size={14} />}>
+              Tracking paused
+            </Chip>
+          ) : null
+        }
+      />
 
       <div className="grid-metrics">
         <div className="card">
@@ -93,53 +123,38 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {dashboard.today.focusMs > 0 || snapshot?.batteryRemainingMin != null ? (
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: -8, marginBottom: 16 }}>
+      {dashboard.today.focusMs > 0 || snapshot?.batteryRemainingMin != null || snapshot?.lastError ? (
+        <div className="chip-row">
           {dashboard.today.focusMs > 0 ? (
-            <div className="card" style={{ padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Expand size={15} color="var(--accent)" />
-              <span style={{ fontSize: 13 }}>
-                Fullscreen focus <b style={{ fontWeight: 650 }}>{formatDuration(dashboard.today.focusMs)}</b> today
-              </span>
-            </div>
+            <Chip icon={<Expand size={14} />}>
+              Fullscreen focus <b>{formatDuration(dashboard.today.focusMs)}</b> today
+            </Chip>
           ) : null}
           {snapshot?.batteryRemainingMin != null ? (
-            <div className="card" style={{ padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Chip tone={snapshot.battery.charging ? 'good' : 'neutral'}>
               {snapshot.battery.charging ? (
-                <BatteryCharging size={15} color="#22c55e" />
+                <BatteryCharging size={14} />
               ) : (
-                <BatteryFull size={15} color="var(--text-secondary)" />
+                <BatteryFull size={14} />
               )}
-              <span style={{ fontSize: 13 }}>
-                {snapshot.battery.pct}%{snapshot.battery.charging ? ' charging' : ` · ~${Math.floor(snapshot.batteryRemainingMin / 60)}h ${snapshot.batteryRemainingMin % 60}m left`}
-              </span>
-            </div>
+              {snapshot.battery.pct}%{' '}
+              {snapshot.battery.charging
+                ? 'charging'
+                : ` · ~${Math.floor(snapshot.batteryRemainingMin / 60)}h ${snapshot.batteryRemainingMin % 60}m left`}
+            </Chip>
           ) : null}
-        </div>
-      ) : null}
-
-      {snapshot?.lastError ? (
-        <div
-          className="card"
-          style={{
-            marginTop: 12,
-            padding: '10px 14px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            borderColor: 'rgba(245, 158, 11, 0.4)',
-          }}
-          role="alert"
-        >
-          <AlertCircle size={16} color="#f59e0b" />
-          <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{snapshot.lastError}</span>
+          {snapshot?.lastError ? (
+            <Chip tone="warn" icon={<AlertCircle size={14} />}>
+              {snapshot.lastError}
+            </Chip>
+          ) : null}
         </div>
       ) : null}
 
       <div className="card chart-card">
         <div className="chart-head">
           <h2 className="section-title" style={{ marginBottom: 0 }}>
-            PC Usage
+            {range === 'today' ? "Today's PC usage" : 'PC Usage'}
           </h2>
           <Segmented<Range>
             options={[
@@ -158,6 +173,8 @@ export default function DashboardPage() {
             title="No usage history yet"
             desc="1Boost will start collecting your PC usage as you use your computer."
           />
+        ) : range === 'today' ? (
+          <HourChart hours={dashboard.hourly} activeHours={dashboard.hourlyActive} />
         ) : points.length === 0 ? (
           <EmptyState
             icon={<Clock size={24} />}
