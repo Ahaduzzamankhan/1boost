@@ -14,7 +14,13 @@ import { join } from 'node:path'
 import { MODULES, modulesIn } from '../src/modules/registry'
 
 const root = join(__dirname, '..')
-const read = (p: string) => readFileSync(join(root, p), 'utf8')
+/**
+ * Reads a source file with line endings normalized to `\n`. The assertions
+ * below are about which lines exist, and a Windows checkout of the repository
+ * (the release job) has every file with CRLF endings — without this the same
+ * test passes in Validate and fails in Release.
+ */
+const read = (p: string) => readFileSync(join(root, p), 'utf8').replace(/\r\n/g, '\n')
 
 const settings = read('src/pages/SettingsPage.tsx')
 const assistantPage = read('src/pages/AssistantPage.tsx')
