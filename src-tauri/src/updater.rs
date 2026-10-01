@@ -306,7 +306,7 @@ fn note_failure() {
     let shift = (*streak).saturating_sub(1).min(4);
     let wait = BACKOFF_BASE_MS.saturating_mul(1u64 << shift).min(BACKOFF_MAX_MS);
     *BACKOFF_UNTIL_MS.lock().unwrap_or_else(|e| e.into_inner()) = crate::util::now_ms() + wait;
-    log::warn!("[1boost] update check failed; next attempt in {wait / 1000}s");
+    log::warn!("[1boost] update check failed; next attempt in {}s", wait / 1000);
 }
 
 fn note_success() {
