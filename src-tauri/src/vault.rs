@@ -1780,30 +1780,21 @@ mod tests {
     }
 
     #[test]
-    fn search_finds_pages_tasks_and_apps() {
+    fn search_ranks_apps_by_match_strength() {
         let v = temp_vault("search");
-        v.save_page(Page { title: "Rust release checklist".into(), blocks: body_to_blocks("sign the key"), ..Default::default() });
-        v.save_task(Task { title: "Reply to Sam".into(), ..Default::default() });
-        let apps = vec![("brave".to_string(), "Brave".to_string(), 3_600_000)];
-        // Every kind is reachable — the point of universal search.
-        let hits = v.search("rel", &apps, &[]);
-        assert!(hits.iter().any(|h| h.kind == "page"), "pages are searchable");
-        assert!(hits.iter().any(|h| h.kind == "task"), "tasks are searchable");
-        let app_hits = v.search("brave", &apps, &[]);
-        assert!(app_hits.iter().any(|h| h.kind == "app" && h.title == "Brave"));
-        // A unique phrase puts its page on top.
-        let exact = v.search("checklist", &apps, &[]);
-        assert_eq!(exact[0].kind, "page");
-        assert!(v.search("zzzz", &apps, &[]).is_empty());
-        assert!(v.search("   ", &apps, &[]).is_empty());
-    }
-
-    #[test]
-    fn archived_pages_stay_out_of_search() {
-        let v = temp_vault("archived");
-        v.save_page(Page { title: "Old roadmap".into(), archived: true, ..Default::default() });
-        assert!(v.search("roadmap", &[], &[]).is_empty());
-        assert_eq!(v.pages().len(), 1, "but it is still on disk and listed");
+        let apps = vec![
+            ("my_brave".to_string(), "My Brave Browser".to_string(), 3_600_000),
+            ("brave".to_string(), "Brave".to_string(), 1_800_000),
+        ];
+        // Pages, tasks and projects are ranked in the renderer against the
+        // cache the app already holds; only the usage history behind an
+        // application needs a round trip, so the backend matches apps alone.
+        let hits = v.search("bra", &apps);
+        assert_eq!(hits.len(), 2);
+        assert!(hits.iter().all(|h| h.kind == "app"));
+        assert_eq!(hits[0].id, "brave", "the prefix match outranks the mid-string one");
+        assert!(v.search("zzzz", &apps).is_empty());
+        assert!(v.search("   ", &apps).is_empty());
     }
 
     #[test]
