@@ -1206,162 +1206,151 @@ pub fn run() {
 // Two switches on purpose: the cargo feature removes the code from a build,
 // the pref removes it from a user's app.
 
+// The commands live at the crate root, like every other command in this file.
+// `generate_handler!` derives the name macro's path from where a command is
+// declared, so a command buried in a submodule does not resolve; keeping them
+// flat here is what makes the cfg gating below work at all.
+
 #[cfg(feature = "experimental-ai")]
-mod ai_commands {
-    use super::*;
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiStatus {
+    /// True when the cargo feature is compiled in.
+    pub compiled_in: bool,
+    /// True when the user has switched it on.
+    pub enabled: bool,
+    /// True when a session has been supplied and looks usable.
+    pub configured: bool,
+    pub models: Vec<ModelOption>,
+    pub error: Option<String>,
+}
+
+#[cfg(feature = "experimental-ai")]
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelOption {
+    pub id: String,
+    pub label: String,
+}
+
+#[cfg(feature = "experimental-ai")]
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiAnswer {
+    pub ok: bool,
+    pub answer: Option<String>,
+    pub error: Option<String>,
+}
+
+#[cfg(feature = "experimental-ai")]
+fn ai_models_list() -> Vec<ModelOption> {
+    crate::assistant::MODELS
+        .iter()
+        .map(|m| ModelOption { id: m.id.to_string(), label: m.label.to_string() })
+        .collect()
+}
+
+/// The user's own pref, not the compile-time flag.
+#[cfg(feature = "experimental-ai")]
+fn ai_user_enabled(app: &AppHandle) -> bool {
+    app.state::<AppState>().tracker.prefs().experimental_ai
+}
+
+#[cfg(feature = "experimental-ai")]
+#[tauri::command]
+fn ai_status(app: AppHandle) -> AiStatus {
+    use crate::assistant::{AssistantError, Session};
+    let enabled = ai_user_enabled(&app);
+    let configured = Session::load().map(|s| s.looks_configured()).unwrap_or(false);
+    let error = if !configured { Some(AssistantError::NoSession.to_string()) } else { None };
+    AiStatus { compiled_in: true, enabled, configured, models: ai_models_list(), error }
+}
+
+#[cfg(feature = "experimental-ai")]
+#[tauri::command]
+async fn ai_ask(app: AppHandle, question: String, model: Option<String>) -> AiAnswer {
     use crate::assistant::{self, AssistantError, Session};
-    use crate::assistant_context;
-
-    #[derive(serde::Serialize)]
-    #[serde(rename_all = "camelCase")]
-    pub struct AiStatus {
-        /// True when the cargo feature is compiled in.
-        pub compiled_in: bool,
-        /// True when the user has switched it on.
-        pub enabled: bool,
-        /// True when a session has been supplied and looks usable.
-        pub configured: bool,
-        pub models: Vec<ModelOption>,
-        pub error: Option<String>,
+    if !ai_user_enabled(&app) {
+        return AiAnswer { ok: false, answer: None, error: Some(AssistantError::Disabled.to_string()) };
     }
-
-    #[derive(serde::Serialize)]
-    #[serde(rename_all = "camelCase")]
-    pub struct ModelOption {
-        pub id: String,
-        pub label: String,
+    let question = question.trim();
+    if question.is_empty() {
+        return AiAnswer { ok: false, answer: None, error: Some("Ask a question first.".into()) };
     }
+    let session = match Session::load() {
+        Ok(s) => s,
+        Err(e) => return AiAnswer { ok: false, answer: None, error: Some(e.to_string()) },
+    };
+    let spec = model
+        .as_deref()
+        .and_then(assistant::resolve_model)
+        .unwrap_or_else(assistant::default_model);
 
-    #[derive(serde::Serialize)]
-    #[serde(rename_all = "camelCase")]
-    pub struct AiAnswer {
-        pub ok: bool,
-        pub answer: Option<String>,
-        pub error: Option<String>,
-    }
+    // The context is read here, under the same lock the dashboard uses.
+    let context = {
+        let st = app.state::<AppState>();
+        let storage = st.tracker.storage.lock().unwrap_or_else(|e| e.into_inner());
+        crate::assistant_context::build_context(&storage.data, now_ms())
+    };
+    // Temporary by default: questions about a user's own activity should not
+    // accumulate in the user's Google account history.
+    let prompt = crate::assistant_context::compose_prompt(&context, question, spec.label);
 
-    pub fn models() -> Vec<ModelOption> {
-        assistant::MODELS
-            .iter()
-            .map(|m| ModelOption { id: m.id.to_string(), label: m.label.to_string() })
-            .collect()
-    }
-
-    /// The user's own pref, not the compile-time flag.
-    fn user_enabled(app: &AppHandle) -> bool {
-        app.state::<AppState>().tracker.prefs().experimental_ai
-    }
-
-    #[tauri::command]
-    pub fn ai_status(app: AppHandle) -> AiStatus {
-        let enabled = user_enabled(&app);
-        let configured = Session::load().map(|s| s.looks_configured()).unwrap_or(false);
-        let error = if !configured {
-            Some(AssistantError::NoSession.to_string())
-        } else {
-            None
-        };
-        AiStatus { compiled_in: true, enabled, configured, models: models(), error }
-    }
-
-    #[tauri::command]
-    pub async fn ai_ask(app: AppHandle, question: String, model: Option<String>) -> AiAnswer {
-        if !user_enabled(&app) {
-            return AiAnswer { ok: false, answer: None, error: Some(AssistantError::Disabled.to_string()) };
-        }
-        let question = question.trim();
-        if question.is_empty() {
-            return AiAnswer {
-                ok: false,
-                answer: None,
-                error: Some("Ask a question first.".into()),
-            };
-        }
-        let session = match Session::load() {
-            Ok(s) => s,
-            Err(e) => return AiAnswer { ok: false, answer: None, error: Some(e.to_string()) },
-        };
-        let spec = model
-            .as_deref()
-            .and_then(assistant::resolve_model)
-            .unwrap_or_else(assistant::default_model);
-
-        // The context is read here, under the same lock the dashboard uses.
-        let context = {
-            let st = app.state::<AppState>();
-            let storage = st.tracker.storage.lock().unwrap_or_else(|e| e.into_inner());
-            assistant_context::build_context(&storage.data, now_ms())
-        };
-        // Temporary by default: questions about a user's own activity should
-        // not accumulate in their Google account history.
-        let prompt = assistant_context::compose_prompt(&context, question, spec.label);
-
-        match assistant::ask(&session, &prompt, spec, true).await {
-            Ok(answer) => AiAnswer { ok: true, answer: Some(answer), error: None },
-            Err(e) => {
-                // Log the kind of failure, never the question or the session.
-                log::warn!("[1boost] assistant request failed: {e}");
-                AiAnswer { ok: false, answer: None, error: Some(e.to_string()) }
-            }
+    match assistant::ask(&session, &prompt, spec, true).await {
+        Ok(answer) => AiAnswer { ok: true, answer: Some(answer), error: None },
+        Err(e) => {
+            // Log the kind of failure, never the question or the session.
+            log::warn!("[1boost] assistant request failed: {e}");
+            AiAnswer { ok: false, answer: None, error: Some(e.to_string()) }
         }
     }
+}
 
-    /// Stores the user's own session cookie. The value is never logged, never
-    /// sent anywhere but gemini.google.com, and written only under the app's
-    /// own data directory.
-    #[tauri::command]
-    pub fn ai_save_session(
-        app: AppHandle,
-        cookie: String,
-        sapisid: Option<String>,
-        auth_user: Option<String>,
-        xsrf_token: Option<String>,
-    ) -> AiStatus {
-        let mut session = Session {
-            cookie,
-            sapisid: sapisid.unwrap_or_default(),
-            auth_user,
-            xsrf_token,
-        };
-        if session.sapisid.is_empty() {
-            session.sapisid = assistant::sapisid_from_cookie(&session.cookie).unwrap_or_default();
-        }
-        if session.save().is_err() {
-            return AiStatus {
-                compiled_in: true,
-                enabled: user_enabled(&app),
-                configured: false,
-                models: models(),
-                error: Some(AssistantError::Write.to_string()),
-            };
-        }
-        // Deliberately reports only whether it is usable, never the value.
-        AiStatus {
+/// Stores the user's own session cookie. The value is never logged, never
+/// sent anywhere but gemini.google.com, and written only under the app's own
+/// data directory.
+#[cfg(feature = "experimental-ai")]
+#[tauri::command]
+fn ai_save_session(app: AppHandle, cookie: String) -> AiStatus {
+    use crate::assistant::{self, AssistantError, Session};
+    let mut session = Session { cookie, ..Default::default() };
+    // Derived, never asked for separately: the cookie the user pasted is the
+    // only thing they had to supply.
+    session.sapisid = assistant::sapisid_from_cookie(&session.cookie).unwrap_or_default();
+    if session.save().is_err() {
+        return AiStatus {
             compiled_in: true,
-            enabled: user_enabled(&app),
-            configured: session.looks_configured(),
-            models: models(),
-            error: None,
-        }
-    }
-
-    #[tauri::command]
-    pub fn ai_clear_session(app: AppHandle) -> AiStatus {
-        Session::clear();
-        AiStatus {
-            compiled_in: true,
-            enabled: user_enabled(&app),
+            enabled: ai_user_enabled(&app),
             configured: false,
-            models: models(),
-            error: None,
-        }
+            models: ai_models_list(),
+            error: Some(AssistantError::Write.to_string()),
+        };
     }
-
-    #[tauri::command]
-    pub fn ai_models() -> Vec<ModelOption> {
-        models()
+    // Deliberately reports only whether it is usable, never the value.
+    AiStatus {
+        compiled_in: true,
+        enabled: ai_user_enabled(&app),
+        configured: session.looks_configured(),
+        models: ai_models_list(),
+        error: None,
     }
 }
 
 #[cfg(feature = "experimental-ai")]
-use ai_commands::{ai_ask, ai_clear_session, ai_models, ai_save_session, ai_status};
+#[tauri::command]
+fn ai_clear_session(app: AppHandle) -> AiStatus {
+    crate::assistant::Session::clear();
+    AiStatus {
+        compiled_in: true,
+        enabled: ai_user_enabled(&app),
+        configured: false,
+        models: ai_models_list(),
+        error: None,
+    }
+}
+
+#[cfg(feature = "experimental-ai")]
+#[tauri::command]
+fn ai_models() -> Vec<ModelOption> {
+    ai_models_list()
+}
