@@ -1,196 +1,228 @@
 # 1Boost
 
-**1Boost** is a PC usage analytics application for Windows. It quietly tracks how
-long your PC is on, how much of that time you were actively using it, which
-applications you focused, and how usage trends over days and weeks — all stored
-locally on your device.
+<div align="center">
 
-## Features
+<img src="https://raw.githubusercontent.com/Ahaduzzamankhan/1boost/main/src-tauri/icons/128x128.png" width="112" alt="1Boost icon">
 
-- **Dashboard** — PC-on time, active usage, idle time, and apps used today, with
-  a 7/30-day usage graph and today's top applications.
-- **Applications** — all-time per-app usage with per-day breakdowns.
-- **Statistics** — averages, longest session, daily bars, and weekday patterns.
-- **History** — a chronological, scannable log of every recorded day.
-- **Settings** — five themes (Dark Glass, White Glass, Solid Dark, Solid White,
-  AMOLED), 8 accent colors, transparency slider, launch-at-startup, pause
-  tracking, idle threshold, history retention, data export/delete, and reduced
-  motion.
-- **Monitor** (v1.1.4) — live CPU, memory, GPU, disk and network dashboards
-  with real-time graphs, temperatures where the hardware exposes them, and
-  per-drive storage bars.
+# 1Boost
 
-### New in v1.2.0
+**A fast, private PC usage analytics & system monitoring app for Windows.**
 
-- **Tauri 2** — the app shell migrated from Electron to Tauri 2 with a much
-  smaller footprint: the WebView2-based binary is a fraction of the old
-  Electron package, starts faster, and keeps the exact same UI. The Rust
-  tracking/monitoring layer is now linked directly into the backend (no more
-  separate DLL sidecar + FFI bridge).
-- **Seamless data migration** — data paths, file formats, schema and the
-  registry Run-key entry are byte-compatible with the Electron build, so
-  installing the Tauri version keeps your history and settings in place.
-- **Signed auto-updates** via the Tauri updater on GitHub Releases
-  (`latest.json` + minisign signatures).
-- Same feature set otherwise: dashboard, apps, statistics, history, monitor,
-  themes, tray, launch-at-login, and all v1.1.6 fixes.
+Track your screen time, active usage, applications, hardware activity, and daily trends — **locally on your own PC.**
 
-### New in v1.1.4
+<br>
 
-- **Monitor fixed** — opening the Monitor page now actually starts the native
-  poll (the subscription IPC was missing, so only the one-shot seed sample ever
-  arrived: CPU/graphs/network froze while memory looked alive). Unavailable
-  temperatures and GPU usage no longer render as literal `-1` chips, and the
-  hottest thermal zone / busiest GPU engine is reported instead of a sum of
-  all instances.
-- **Windows 11 detected correctly** — the Monitor header no longer claims
-  "Windows 10" on Windows 11 (the registry ProductName is still "Windows 10"
-  there; the build number is the truth, ≥ 22000 = Windows 11).
-- **Rounded corners + stable animations** — the frameless window now gets a
-  real rounded shell (collapses when maximized), and the page/modal/toast
-  transitions no longer animate transforms above the blur layer, which caused
-  corrupted/torn frames on transparent windows.
-- **Update prompt** — when an update finishes downloading, 1Boost shows an
-  in-app prompt with **Restart now** / **Later** instead of a toast.
-- **Delta updates** — NSIS builds ship differential packages so updates only
-  download changed blocks.
-- **Official icons** — drop the official PNG(s) into a root `icons/` folder;
-  `make-icons.js` embeds the largest one into `icon.ico`/`tray.ico`
-  automatically (procedural amber fallback otherwise), and the in-app brand
-  mark uses the same artwork style.
-- Chart axis labels no longer clip ("4h 20m" rendered as "h 20m"), per-day
-  labels use local dates, and the App User Model ID matches the installer
-  identity so notifications group correctly.
+[![Version](https://img.shields.io/github/package-json/v/Ahaduzzamankhan/1boost?style=for-the-badge&label=version)](https://github.com/Ahaduzzamankhan/1boost/releases)
+[![Build](https://img.shields.io/github/actions/workflow/status/Ahaduzzamankhan/1boost/release.yml?style=for-the-badge&label=build)](https://github.com/Ahaduzzamankhan/1boost/actions)
+[![Release](https://img.shields.io/github/v/release/Ahaduzzamankhan/1boost?style=for-the-badge)](https://github.com/Ahaduzzamankhan/1boost/releases/latest)
+[![License](https://img.shields.io/github/license/Ahaduzzamankhan/1boost?style=for-the-badge)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Windows-0078D4?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/Ahaduzzamankhan/1boost)
 
-- **System monitoring** — a new Monitor page shows CPU usage, RAM, GPU,
-  disk activity (read/write speeds), and network throughput, each with a
-  real-time graph of the last ~2 minutes. Temperatures appear when the
-  hardware exposes a sensor and are shown as unavailable otherwise — never
-  guessed.
-- **Native Rust monitoring layer** — all sampling happens in
-  `oneboost_native.dll` via Windows performance APIs (PDH, GetSystemTimes,
-  GetIfTable), exposed through one compact FFI snapshot. The renderer never
-  polls: the main process pushes one IPC update every 2 s while the Monitor
-  page is open, and the poll timer stops entirely when nobody is listening.
-- **UI polish** — rounded corners normalized onto the design-token radii
-  across surfaces, and a dedicated two-column monitor card grid that adapts
-  to narrow windows.
-- Bug fixes: the browser preview harness reported stale hard-coded versions
-  ('1.0.0' / '1.1.1'); it now tracks the real app version.
+</div>
 
-### New in v1.1.2
+---
 
-- **Update channels** — stable installs are never auto-updated to alpha/beta
-  builds; they only follow stable releases. Installs from an alpha/beta tag
-  watch the beta channel and automatically return to the stable channel as
-  soon as a newer stable release exists.
-- **Transparency glitches fixed** — the glass themes composited a full-window
-  blur plus a per-card blur every frame, causing black/white flicker bands.
-  The window is now natively transparent with a single blur layer.
-- Assorted cleanups: removed a no-op assignment in the app-switch tracker,
-  replaced hidden `require()` calls with static imports, and a no-white-flash
-  window background.
+## ✦ What is 1Boost?
 
-### New in v1.1.1
+**1Boost** is a lightweight Windows desktop app that helps you understand how you use your PC.
 
-- **Automatic updates** — 1Boost checks GitHub Releases in the background,
-  downloads new versions automatically, and asks before restarting to install
-  (**Settings → Updates**, with a manual *Check for updates* action and live
-  download progress).
-- **Fixed startup status** — the "Launch at Windows startup" status now reads
-  the actual Windows Run key, so it reports the truth (and "Fix now" repairs
-  it) instead of showing a false "Windows is not starting 1Boost yet".
+It records usage **locally**, turns raw activity into useful daily statistics, and combines that with real-time hardware monitoring — without accounts, telemetry, or cloud tracking.
 
-### New in v1.1.0
+> **Your usage data stays on your machine.**
 
-- **Durable history** — every save is followed by rolling backups
-  (`usage-data.json.bak0–2`); if the data file is ever damaged, 1Boost restores
-  the newest good backup automatically instead of starting over. Sleep, lock
-  and shutdown now persist synchronously so Windows can't cut the write off.
-- **Reliable auto-start** — the launch-at-login entry is re-asserted on every
-  app start (repairing stale paths after updates) and Settings shows live
-  Windows status with a one-click **Fix now** repair action.
-- **Fullscreen focus tracking (Rust)** — the native layer detects when the
-  foreground window covers its monitor (games, films) and the dashboard shows
-  your fullscreen focus time for the day.
-- **Battery estimate** — the dashboard shows remaining battery time reported
-  by Windows while unplugged.
+### At a glance
 
-## How tracking works
+| | |
+|---|---|
+| 🖥️ **PC Usage** | PC-on, active, idle and session tracking |
+| 📊 **Analytics** | Daily, weekly and historical usage trends |
+| 🧩 **Applications** | Per-application usage and breakdowns |
+| ⚡ **Monitor** | CPU, RAM, GPU, disk and network activity |
+| 🌡️ **Hardware** | Temperatures when Windows exposes a real sensor |
+| 🔄 **Updater** | Signed automatic updates with differential packages |
+| 💾 **Local-first** | No accounts, telemetry or cloud database |
+| 🦀 **Rust-powered** | Native monitoring and tracking layer |
 
-1Boost pairs a tiny **Rust native layer** (`native/`) with a **Tauri 2**
-backend (`src-tauri/`):
+---
 
-- A native event-pump thread receives **Windows power broadcasts** (sleep,
-  resume), **power-setting notifications** (display on/off), and **session
-  notifications** (lock/unlock/logoff).
-- A ~1.2 s sample loop reads the **foreground application**, **keyboard/mouse
-  idle time**, battery state, and console lock state.
-- Samples are folded into per-day buckets (active/idle/PC-on/per-app usage),
-  and sessions are cut on sleep/lock/shutdown so averages stay honest.
-- **Uptime-gap analysis** catches suspends even if a broadcast is missed, and
-  unaccounted gaps are never counted as usage.
+## 🖼️ 1Boost
 
-Data lives in `%APPDATA%/1Boost/usage-data.json` (atomic writes, rolling
-backups, automatic corruption recovery) — the same location and format the
-original Electron build used, so existing installs keep their history and
-preferences when upgrading to the Tauri version. Nothing ever leaves your
-machine.
+<div align="center">
 
-## Development
+<img src="https://opengraph.githubassets.com/1/Ahaduzzamankhan/1boost" alt="1Boost GitHub preview" width="900">
 
-```bash
-npm install                 # dependencies (Tauri CLI + renderer toolchain)
-npm run native:build        # compile the Rust tracking layer (requires cargo)
-npm run build:renderer      # build the React UI into dist/
-npm run tauri:dev           # run the desktop app in dev mode
-npm run typecheck && npm test   # typecheck + unit tests (aggregation, formatting, sessions)
+</div>
+
+---
+
+## 🚀 Features
+
+### 📈 Dashboard
+- PC-on time
+- Active usage
+- Idle time
+- Today's top applications
+- 7/30-day usage trends
+- Fullscreen focus tracking
+- Battery time estimate
+
+### 🧩 Application analytics
+- All-time per-app usage
+- Daily application breakdown
+- Usage history
+- Chronological activity records
+
+### 🖥️ System Monitor
+Real-time native monitoring for CPU, memory, GPU, disk, network, temperatures where available, storage and live graphs.
+
+### 🎨 Customization
+- Dark Glass
+- White Glass
+- Solid Dark
+- Solid White
+- AMOLED
+- Multiple accent colors
+- Transparency control
+- Reduced motion
+- Rounded desktop window
+
+### 🔄 Modern updater
+Signed Tauri updates, GitHub Releases integration, background downloads and differential NSIS packages.
+
+---
+
+## 🧠 Architecture
+
+```text
+┌──────────────────────────────────────────┐
+│              1Boost Desktop              │
+├──────────────────────────────────────────┤
+│          React + TypeScript UI           │
+├──────────────────────────────────────────┤
+│                  Tauri 2                 │
+│          Commands • Events • Updater     │
+├──────────────────────────────────────────┤
+│                 Rust Core                │
+│   Usage • Sessions • System Monitoring   │
+├──────────────────────────────────────────┤
+│              Windows APIs                │
+└──────────────────────────────────────────┘
 ```
 
-The packaged build is `npm run tauri:build` (Windows NSIS x64 installer).
-Updatersign artifacts are produced when `TAURI_SIGNING_PRIVATE_KEY` is
-available in the environment (or in `.github/signing/updater-credentials.json`
-for CI). Regenerate Tauri icons after changing artwork with `npm run icons:tauri`.
+---
 
-`legacy/aggregator.ts` keeps the original TypeScript aggregation logic and
-data-shape constants, used by the unit tests and as a reference for the Rust
-port in `src-tauri/`.
+## 🔒 Privacy first
 
-## Releasing
+1Boost is designed around local data ownership.
 
-Releases are automated with GitHub Actions (`.github/workflows/release.yml`)
-using [tauri-action](https://github.com/tauri-apps/tauri-action):
+- No account required
+- No telemetry
+- No cloud database
+- No usage data uploaded
+- Local JSON storage
+- Atomic writes
+- Rolling backups
+- Automatic corruption recovery
+- Delete your data whenever you want
 
-1. Bump `version` in `package.json` **and** `src-tauri/tauri.conf.json`.
-2. Commit and tag: `git tag v1.2.0 && git push origin v1.2.0`.
-3. The workflow builds the Rust layer + NSIS x64 installer, signs the update
-   bundle, and publishes a GitHub Release with
-   `1Boost_<version>_x64-setup.exe`, the `.nsis.zip` updater payload (+
-   `.sig`), `latest.json`, and `latest.yml` (the electron-updater feed that
-   carries v1.1.x installs over to the Tauri build), using the `1.2.0` section
-   of [`CHANGELOG.md`](CHANGELOG.md) as the release body.
+Data is stored at:
 
-Installed apps auto-update from the same Releases feed via the Tauri updater
-(`plugins.updater` endpoint in `tauri.conf.json`).
+```text
+%APPDATA%/1Boost/usage-data.json
+```
 
-### Update signing key
+---
 
-The keypair lives in `.github/signing/updater-credentials.json`; CI verifies it
-by signing a probe before the Rust build and then masks it in the log. If the
-repository has a `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD
-Actions **secret**, that is used instead and the file is only the fallback.
+## ⚡ Tech Stack
 
-> [!WARNING]
-> This repository is public, so the committed private key is public too.
-> Anyone holding it can sign an update that installed copies of 1Boost accept.
-> Keep the file readable only to people who already trust the repository, and
-> rotate it (`npx tauri signer generate -w <file>` plus a new
-> `plugins.updater.pubkey` in `tauri.conf.json`) if it is ever exposed further.
-> A private (or paid) repository plus an Actions secret removes the concern.
+| Layer | Technology |
+|---|---|
+| Desktop runtime | **Tauri 2** |
+| UI | **React 19 + TypeScript** |
+| Native core | **Rust** |
+| Testing | **Vitest + Rust tests** |
+| Installer | **NSIS x64** |
+| Updates | **Tauri Updater + GitHub Releases** |
+| Monitoring | **Windows native APIs** |
 
-The tag must match the `tauri.conf.json` version (the workflow verifies it).
+---
 
-## Privacy
+## 📦 Installation
 
-All tracking is local. No telemetry, no network calls, no accounts. Delete
-everything at any time from **Settings → Data → Delete all data**.
+**[→ Download the latest 1Boost release](https://github.com/Ahaduzzamankhan/1boost/releases/latest)**
+
+The installer uses the current-user installation mode.
+
+---
+
+## 🛠️ Development
+
+```bash
+git clone https://github.com/Ahaduzzamankhan/1boost.git
+cd 1boost
+npm install
+
+npm run native:build
+npm run build:renderer
+npm run tauri:dev
+```
+
+Checks:
+
+```bash
+npm run typecheck
+npm test
+npm run rust:test
+```
+
+Production:
+
+```bash
+npm run tauri:build
+```
+
+---
+
+## 🔄 Release flow
+
+1. Update the application version.
+2. Build and test the native + frontend layers.
+3. Create a version tag.
+4. GitHub Actions builds the Windows installer.
+5. Update artifacts are signed.
+6. GitHub Release publishes the installer and updater metadata.
+7. Installed clients can detect and download updates automatically.
+
+---
+
+## 🗺️ Project status
+
+**Current version: 1.3.2**
+
+- [x] Usage tracking
+- [x] Application tracking
+- [x] Statistics
+- [x] History
+- [x] System monitoring
+- [x] Rust native layer
+- [x] Tauri 2 migration
+- [x] Automatic updates
+- [x] Differential updates
+- [x] Signed updater
+- [x] Local data recovery
+- [ ] More advanced analytics
+- [ ] More monitoring metrics
+- [ ] Further performance optimization
+
+---
+
+<div align="center">
+
+**Built for Windows · Powered by Rust · Designed for focus**
+
+[⭐ Star](https://github.com/Ahaduzzamankhan/1boost) · [🐛 Issues](https://github.com/Ahaduzzamankhan/1boost/issues) · [🚀 Releases](https://github.com/Ahaduzzamankhan/1boost/releases)
+
+### 1Boost
+**Know your PC. Understand your time.**
+
+</div>
