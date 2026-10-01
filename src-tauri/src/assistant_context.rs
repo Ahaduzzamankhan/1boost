@@ -137,9 +137,7 @@ fn truncate(text: &mut String, max: usize) -> String {
         return text.clone();
     }
     let cut: String = text.chars().take(max.saturating_sub(24)).collect();
-    let mut out = cut;
-    out.push_str("...\n[truncated]\n");
-    out
+    format!("{cut}...\n[truncated]")
 }
 
 /// Wall-clock time of a session's start, for a human-readable sentence.
@@ -183,7 +181,7 @@ mod tests {
 
     fn seeded() -> UsageData {
         let mut data = UsageData::empty();
-        let mut day = DayData::empty("2026-09-30".to_string(), 0);
+        let mut day = DayData::empty(today_key(), 0);
         day.pc_on_ms = 8 * 3_600_000;
         day.active_ms = 6 * 3_600_000;
         day.idle_ms = 2 * 3_600_000;
@@ -193,13 +191,21 @@ mod tests {
         day.apps.insert("code".into(), 2 * 3_600_000);
         data.app_names.insert("brave".into(), "Brave".into());
         data.app_names.insert("code".into(), "VS Code".into());
-        data.days.insert("2026-09-30".to_string(), day);
+        let key = today_key();
+        data.days.insert(key, day);
         data
     }
 
     fn at_day() -> u64 {
         // 2026-09-30 local noon, UTC.
         1_787_160_000_000
+    }
+
+    /// The day key `build_context` will look for. Derived rather than
+    /// hard-coded, because day keys are local and this suite must pass in
+    /// every timezone CI happens to run in.
+    fn today_key() -> String {
+        day_key(at_day())
     }
 
     #[test]
@@ -223,7 +229,7 @@ mod tests {
         // The context goes to a remote service; it is facts about time, not
         // the layout of someone's disk.
         let mut data = seeded();
-        let today = "2026-09-30".to_string();
+        let today = today_key();
         data.days.get_mut(&today).unwrap().apps.insert("x".into(), 1);
         data.app_paths.insert("x".into(), "C:\\Users\\someone\\Secret\\thing.exe".into());
         let ctx = build_context(&data, at_day());
@@ -244,7 +250,7 @@ mod tests {
         let mut data = UsageData::empty();
         let base = at_day();
         for i in 0..730_i64 {
-            let key = crate::util::shift_day_key("2026-09-30", -i).unwrap();
+            let key = crate::util::shift_day_key(&today_key(), -i).unwrap();
             let mut day = DayData::empty(key.clone(), 0);
             day.pc_on_ms = 16 * 3_600_000;
             day.active_ms = 12 * 3_600_000;

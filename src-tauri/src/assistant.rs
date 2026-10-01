@@ -388,7 +388,17 @@ pub fn parse_answer(raw: &str) -> Result<String, AssistantError> {
                 continue;
             };
             for text in texts {
-                if let Some(s) = text.as_str() {
+                // Each chunk arrives as a tuple whose first field is the
+                // text; a bare string is accepted too, because the shape has
+                // changed between front-end builds. Reading the element
+                // itself as a string returns nothing on the real payload,
+                // which is an empty answer rather than a wrong one.
+                let candidate = match text {
+                    serde_json::Value::String(s) => Some(s.as_str()),
+                    serde_json::Value::Array(fields) => fields.first().and_then(|v| v.as_str()),
+                    _ => None,
+                };
+                if let Some(s) = candidate {
                     if s.len() > best.len() {
                         best = s.to_string();
                     }
@@ -634,10 +644,11 @@ mod tests {
 
     #[test]
     fn reads_an_answer_out_of_a_front_end_stream() {
+        // inner[4][*][1][*][0], the shape the front end actually sends.
         let inner = serde_json::json!([
             null, null, "0",
             null,
-            [[["Hello", null, null], [" there", null, null]]]
+            [[null, [["Hello", null, null], [" there", null, null]]]]
         ]);
         let line = format!(
             ")]}}'\n[[\"wrb.fr\",null,\"{}\",null,null,null,\"generic\"]]",
@@ -652,7 +663,8 @@ mod tests {
     fn a_short_answer_is_not_dropped_by_a_size_heuristic() {
         // "You were on for 8h." is a complete, correct answer. An earlier
         // minimum-line-length guard threw it away and returned EmptyAnswer.
-        let inner = serde_json::json!([null, null, "0", null, [[["You were on for 8h.", null, null]]]]);
+        let inner =
+            serde_json::json!([null, null, "0", null, [[null, [["You were on for 8h.", null, null]]]]]);
         let line = format!(
             ")]}}'\n[[\"wrb.fr\",null,\"{}\"]]",
             serde_json::to_string(&inner).unwrap()
@@ -664,13 +676,14 @@ mod tests {
     fn a_streamed_answer_settles_on_the_longest_chunk() {
         // Each line repeats the sentence with more of it, so the last short
         // chunk must not win.
-        let inner = serde_json::json!([null, null, "0", null, [[["The quick brown fox", null, null]]]]);
+        let inner =
+            serde_json::json!([null, null, "0", null, [[null, [["The quick brown fox", null, null]]]]]);
         let long = format!(
             "[[\"wrb.fr\",null,\"{}\"]]",
             serde_json::to_string(&inner).unwrap()
         );
         let partial_inner =
-            serde_json::json!([null, null, "0", null, [[["The quick", null, null]]]]);
+            serde_json::json!([null, null, "0", null, [[null, [["The quick", null, null]]]]]);
         let partial = format!(
             "[[\"wrb.fr\",null,\"{}\"]]",
             serde_json::to_string(&partial_inner).unwrap()

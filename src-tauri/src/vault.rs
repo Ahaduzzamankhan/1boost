@@ -581,7 +581,17 @@ mod tests {
 
     fn temp_vault(tag: &str) -> Vault {
         static N: AtomicU32 = AtomicU32::new(0);
-        let dir = std::env::temp_dir().join(format!("1boost-vault-{}-{}", tag, N.fetch_add(1, Ordering::Relaxed)));
+        // The counter restarts with every process, so two runs of the suite on
+        // the same machine used to reuse each other's directories and fail on
+        // state left behind by the previous run. The pid plus a wipe makes
+        // every call genuinely fresh.
+        let dir = std::env::temp_dir().join(format!(
+            "1boost-vault-{}-{}-{}",
+            tag,
+            std::process::id(),
+            N.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
         Vault::new(dir)
     }
 
