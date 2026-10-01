@@ -452,6 +452,8 @@ export const DEFAULT_PREFS: Prefs = {
   idleThresholdMin: 1,
   keepHistoryDays: 365,
   showTray: true,
+  // The experimental assistant is opt-in, never on by default.
+  experimentalAi: false,
 }
 
 const DATA_VERSION = 1

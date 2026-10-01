@@ -2,6 +2,53 @@
    1Boost — workspace shell, command palette and productivity modules
    ============================================================ */
 
+/* ------------------------------------------------------ assistant (experimental)
+   The disclosure reuses `.setting-note`, so it matches every other inline result
+   line in the app rather than inventing a second callout style. */
+
+.ai-disclosure {
+  margin: 0;
+}
+
+.ai-model-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin: var(--space-4) 0;
+}
+
+.ai-ask {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+}
+
+.ai-question {
+  min-height: 76px;
+  flex: 1;
+}
+
+.ai-ask .btn {
+  flex-shrink: 0;
+}
+
+.ai-answer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.ai-answer-body {
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* ---------------------------------------------------------- workspace bar */
 
 .workspace-picker {

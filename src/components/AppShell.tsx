@@ -292,7 +292,10 @@ function Shell({
     if (def?.workspace) setWorkspace(def.workspace)
   }, [page])
 
-  const navItems = useMemo(() => modulesIn(workspace), [workspace])
+  const navItems = useMemo(
+    () => modulesIn(workspace, prefs.experimentalAi),
+    [workspace, prefs.experimentalAi],
+  )
 
   const go = useCallback(
     (p: PageId, payload?: { noteId?: string; taskId?: string }) => {

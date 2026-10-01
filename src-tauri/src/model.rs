@@ -66,6 +66,10 @@ pub struct Prefs {
     pub idle_threshold_min: i64,
     pub keep_history_days: i64,
     pub show_tray: bool,
+    /// User opt-in for the experimental AI assistant (1.3.2). Defaults to off,
+    /// and `serde(default)` keeps settings files written before it intact.
+    #[serde(default)]
+    pub experimental_ai: bool,
 }
 
 impl Default for Prefs {
@@ -81,6 +85,7 @@ impl Default for Prefs {
             idle_threshold_min: 1,
             keep_history_days: 365,
             show_tray: true,
+            experimental_ai: false,
         }
     }
 }

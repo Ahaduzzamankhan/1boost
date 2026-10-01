@@ -246,6 +246,9 @@ pub fn sanitize_prefs(p: serde_json::Value) -> Prefs {
             if let Some(b) = p.get("showTray").and_then(|b| b.as_bool()) {
                 out.show_tray = b;
             }
+            if let Some(b) = p.get("experimentalAi").and_then(|b| b.as_bool()) {
+                out.experimental_ai = b;
+            }
             let _ = &mut prefs;
             out
         }

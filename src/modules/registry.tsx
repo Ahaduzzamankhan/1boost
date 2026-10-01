@@ -11,6 +11,7 @@ import {
   LayoutDashboard,
   ChartNoAxesCombined,
   NotebookPen,
+  Sparkles,
   Settings as SettingsIcon,
   ListChecks,
   Wrench,
@@ -43,6 +44,7 @@ const CalendarPage = lazy(() => import('../pages/CalendarPage'))
 const UtilitiesPage = lazy(() => import('../pages/UtilitiesPage'))
 const DevToolsPage = lazy(() => import('../pages/DevToolsPage'))
 const FilesPage = lazy(() => import('../pages/FilesPage'))
+const AssistantPage = lazy(() => import('../pages/AssistantPage'))
 
 /** Workspace groups, so the sidebar stays scannable as modules grow. */
 export type WorkspaceId = 'insight' | 'capture' | 'utilities'
@@ -64,6 +66,12 @@ export interface ModuleDef {
   component: LazyExoticComponent<ComponentType<any>>
   /** Settings lives in the sidebar footer, not in a workspace list. */
   footer?: boolean
+  /**
+   * Experimental modules stay out of the sidebar until their pref is on, so
+   * the rail only ever shows things that are actually usable. They remain
+   * reachable from the command palette, which explains how to switch them on.
+   */
+  experimentalAi?: boolean
 }
 
 export const WORKSPACES: Workspace[] = [
@@ -175,6 +183,15 @@ export const MODULES: ModuleDef[] = [
     component: FilesPage,
   },
   {
+    id: 'assistant',
+    label: 'Assistant',
+    keywords: ['assistant', 'ai', 'ask', 'gemini', 'experimental', 'chat'],
+    workspace: 'utilities',
+    icon: <Sparkles size={18} />,
+    component: AssistantPage,
+    experimentalAi: true,
+  },
+  {
     id: 'settings',
     label: 'Settings',
     keywords: ['settings', 'preferences', 'theme', 'startup', 'tray', 'about', 'system'],
@@ -194,8 +211,10 @@ export function moduleById(id: PageId): ModuleDef | undefined {
 }
 
 /** Modules shown in a workspace; the footer item is excluded. */
-export function modulesIn(workspace: WorkspaceId): ModuleDef[] {
-  return MODULES.filter((m) => m.workspace === workspace && !m.footer)
+export function modulesIn(workspace: WorkspaceId, experimentalAiEnabled = false): ModuleDef[] {
+  return MODULES.filter(
+    (m) => m.workspace === workspace && !m.footer && (!m.experimentalAi || experimentalAiEnabled),
+  )
 }
 
 export function moduleLabel(id: PageId): string {

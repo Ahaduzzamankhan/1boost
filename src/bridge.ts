@@ -1,9 +1,9 @@
-import type { Bridge, PageId, Prefs } from '../shared/types'
+import type { AiAnswer, AiStatus, Bridge, PageId, Prefs } from '../shared/types'
 
 /**
  * Browser-harness only: matches package.json so About/Updates never lie.
  */
-const HARNESS_VERSION = '1.3.1'
+const HARNESS_VERSION = '1.3.2'
 
 declare global {
   interface Window {
@@ -104,6 +104,15 @@ function createBrowserHarnessBridge(): Bridge {
     idleThresholdMin: 1,
     keepHistoryDays: 365,
     showTray: true,
+    experimentalAi: false,
+  }
+  /** The harness is not a Tauri build, so the assistant is simply absent. */
+  const noAi: AiStatus = {
+    compiledIn: false,
+    enabled: false,
+    configured: false,
+    models: [],
+    error: null,
   }
   const listeners: Record<string, ((...args: unknown[]) => void)[]> = {}
   const emit = (ch: string, ...args: unknown[]) => (listeners[ch] ?? []).forEach((f) => f(...args))
@@ -243,6 +252,14 @@ function createBrowserHarnessBridge(): Bridge {
     tagIndex: async () => ({}),
     searchEverything: async () => [],
     quickCapture: async (input) => ({ kind: 'note', title: input, id: '' }),
+    aiStatus: async () => noAi,
+    aiAsk: async () => ({
+      ok: false,
+      answer: null,
+      error: 'The experimental assistant is not available in the browser preview.',
+    }),
+    aiSaveSession: async () => noAi,
+    aiClearSession: async () => noAi,
     fileRoots: async () => [],
     filesRecent: async () => [],
     filesSearch: async () => [],
@@ -353,6 +370,16 @@ function createTauriBridge(): Bridge {
       invoke('search_everything', { query }) as Promise<Awaited<ReturnType<Bridge['searchEverything']>>>,
     quickCapture: (input) =>
       invoke('quick_capture', { input }) as Promise<Awaited<ReturnType<Bridge['quickCapture']>>>,
+    // The ai_* commands only exist when the crate was built with the
+    // experimental-ai feature, so a rejected invoke is the normal "not in this
+    // build" answer rather than an error worth surfacing.
+    aiStatus: () => invoke('ai_status').then((s) => s as AiStatus).catch(() => null),
+    aiAsk: (question, model = null) =>
+      invoke('ai_ask', { question, model }) as Promise<AiAnswer>,
+    aiSaveSession: (cookie) =>
+      invoke('ai_save_session', { cookie }).then((s) => s as AiStatus).catch(() => null),
+    aiClearSession: () =>
+      invoke('ai_clear_session').then((s) => s as AiStatus).catch(() => null),
     fileRoots: () => invoke('file_roots') as Promise<Awaited<ReturnType<Bridge['fileRoots']>>>,
     filesRecent: (force = false) =>
       invoke('files_recent', { force }) as Promise<Awaited<ReturnType<Bridge['filesRecent']>>>,

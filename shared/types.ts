@@ -112,6 +112,34 @@ export interface Prefs {
   idleThresholdMin: number
   keepHistoryDays: number
   showTray: boolean
+  /** User opt-in for the experimental AI assistant. Off by default. */
+  experimentalAi: boolean
+}
+
+/**
+ * State of the experimental assistant. `compiledIn` is false in builds made
+ * without the cargo feature, which is how the UI knows to hide the module.
+ */
+export interface AiStatus {
+  compiledIn: boolean
+  /** The user's own switch, from `prefs.experimentalAi`. */
+  enabled: boolean
+  /** A usable session has been supplied. */
+  configured: boolean
+  models: AiModelOption[]
+  /** Why the assistant cannot be used yet, when that is the case. */
+  error: string | null
+}
+
+export interface AiModelOption {
+  id: string
+  label: string
+}
+
+export interface AiAnswer {
+  ok: boolean
+  answer: string | null
+  error: string | null
 }
 
 /** Windows login-item state as probed from the main process. */
@@ -369,6 +397,13 @@ export interface Bridge {
   tagIndex: () => Promise<Record<string, number>>
   searchEverything: (query: string) => Promise<SearchHit[]>
   quickCapture: (input: string) => Promise<CaptureResult>
+  // Experimental assistant --------------------------------------------
+  /** Absent (rejects) in builds compiled without the experimental-ai feature. */
+  aiStatus: () => Promise<AiStatus | null>
+  aiAsk: (question: string, model?: string | null) => Promise<AiAnswer>
+  /** Stores the user's own cookie. The value is never echoed back. */
+  aiSaveSession: (cookie: string) => Promise<AiStatus | null>
+  aiClearSession: () => Promise<AiStatus | null>
   // File tools ----------------------------------------------------------
   fileRoots: () => Promise<RootFolder[]>
   filesRecent: (force?: boolean) => Promise<FileEntry[]>
@@ -452,6 +487,7 @@ export type PageId =
   | 'clipboard'
   | 'calendar'
   | 'utilities'
+  | 'assistant'
   | 'devtools'
   | 'files'
 

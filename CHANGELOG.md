@@ -8,6 +8,35 @@ section is injected into the GitHub Release body by CI
 
 ### Added
 
+- **An experimental AI assistant.** A new Assistant module asks Gemini questions
+  about your own recorded usage — how today went, when you are most productive,
+  how this week compares to the last. It lives entirely inside the existing
+  `1Boost.exe`: the request is built and sent by the Rust backend, there is no
+  sidecar service and no new dependency on the user's machine.
+  - **Off by default, behind two switches.** The whole feature is behind a
+    `experimental-ai` cargo feature that is compiled out entirely unless the
+    build asks for it, and behind a per-user pref that defaults to off. Turning
+    the pref off also deletes the stored session.
+  - **Your data is disclosed before it is sent.** Each question goes out with a
+    short, capped summary of usage totals — hours, percentages and application
+    display names. File names, paths and note contents are never included, and
+    the summary is described in Settings and again on the Assistant page.
+  - **You connect the session yourself.** The user pastes their own Gemini
+    cookie; 1Boost never reads a browser profile and never ships a credential.
+    The value is written only to the app's own data folder at runtime, is never
+    logged, and is never written to this repository.
+  - **It is not unlimited, and it says so.** Answers come from one signed-in
+    web session, so they are bound by that account's quota, and Google can
+    change or withdraw the front end at any time. Questions are sent as
+    temporary chats so they do not accumulate in Google account history.
+  - Labelled Experimental in the sidebar, the page header and Settings, with
+    the standing note that it may be changed, disabled or removed in any
+    release.
+
+## [1.3.1] - 2026-09-30
+
+### Added
+
 - **Delta updates are now the primary updater** — a release publishes a signed
   `.1bdelta` patch next to its updater payload, and an install that already
   has the previous payload on disk rebuilds the new one locally. A typical
@@ -27,16 +56,6 @@ section is injected into the GitHub Release body by CI
 - The cached payload keeps a sidecar hash and is refused if its bytes no longer
   match, and version strings from the release feed are validated before they are
   used as file names.
-
-### Notes
-
-- The first update an install takes is still a full download: the NSIS
-  installer leaves no copy of the updater payload behind, so there is nothing to
-  patch against until 1Boost has cached one itself. From the second update on,
-  the delta path is used. Every failure mode falls back to the full update, so
-  the worst case is the previous download size.
-
-## [1.3.1] - 2026-09-30
 
 ### Fixed
 
@@ -138,6 +157,11 @@ section is injected into the GitHub Release body by CI
 
 ### Notes
 
+- The first update an install takes is still a full download: the NSIS
+  installer leaves no copy of the updater payload behind, so there is nothing to
+  patch against until 1Boost has cached one itself. From the second update on,
+  the delta path is used. Every failure mode falls back to the full update, so
+  the worst case is the previous download size.
 - `npm run dev` now builds the renderer and serves it, so the UI can be opened
   in a browser. It is a local preview; the app itself is still the Tauri build.
 

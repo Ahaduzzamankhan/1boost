@@ -1,6 +1,6 @@
 [package]
 name = "oneboost"
-version = "1.3.1"
+version = "1.3.2"
 description = "1Boost — PC usage analytics for Windows"
 authors = ["1Boost"]
 license = "MIT"
@@ -10,6 +10,12 @@ rust-version = "1.77"
 [lib]
 name = "oneboost_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+# The experimental AI assistant (1.3.2). Off by default: the module, its
+# commands and its sha1 dependency are all compiled out unless this is on, so
+# the whole feature can be removed without leaving a seam behind.
+experimental-ai = ["dep:sha1"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -23,6 +29,8 @@ log = "0.4"
 # versions tauri-plugin-updater already pulls in, so the updater and this module
 # share one copy of each rather than linking two.
 sha2 = "0.10"
+# SHA-1 is Google's SAPISIDHASH primitive for the experimental assistant only.
+sha1 = { version = "0.10", optional = true }
 base64 = "0.22"
 minisign-verify = "0.2"
 zip = "4"

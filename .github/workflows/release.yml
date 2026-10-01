@@ -147,6 +147,12 @@ jobs:
         working-directory: src-tauri
         run: cargo test --lib --release
 
+      # The shipped binary is built with this feature on, so its tests run
+      # here rather than only in the Validate workflow.
+      - name: Run Rust tests (experimental assistant)
+        working-directory: src-tauri
+        run: cargo test --lib --release --features experimental-ai
+
       - name: Generate Tauri icon set
         run: node scripts/make-tauri-icons.js
 
@@ -186,7 +192,7 @@ jobs:
           releaseDraft: true
           releaseBody: ${{ env.RELEASE_BODY }}
           prerelease: false
-          args: --target x86_64-pc-windows-msvc
+          args: --target x86_64-pc-windows-msvc --features experimental-ai
 
       - name: Generate updater manifest (latest.json)
         if: startsWith(github.ref, 'refs/tags/v')
