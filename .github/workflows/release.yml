@@ -286,8 +286,13 @@ jobs:
           fi
 
           # Sign with the key already loaded and verified earlier in this run.
+          # `tauri signer sign` picks TAURI_SIGNING_PRIVATE_KEY up from the
+          # environment and turns it into a --private-key argument, which it
+          # refuses to combine with an explicit --private-key-path. Strip it
+          # from this one command's environment; the key is passed by file.
           printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" > "$RUNNER_TEMP/updater.key"
-          if ! npx --no-install tauri signer sign -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" \
+          if ! env -u TAURI_SIGNING_PRIVATE_KEY npx --no-install tauri signer sign \
+              -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" \
               -f "$RUNNER_TEMP/updater.key" raw.1bdelta; then
             echo "::warning::could not sign the delta; releasing without it"
             exit 0
