@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  AlertCircle,
   ChevronRight,
   CornerDownLeft,
   FileText,
+  FolderGit2,
   Link2,
   Plus,
   Search,
@@ -12,15 +14,20 @@ import {
 } from 'lucide-react'
 import type { Block, Page } from '../../shared/types'
 import BlockEditor from '../components/BlockEditor'
-import { EmptyState, ErrorState } from '../components/ui'
+import { Bar, EmptyState, ErrorState } from '../components/ui'
+import { Marked } from '../components/SearchBits'
 import { useFocusTarget } from '../nav'
+import { useNavigation } from '../state'
 import {
   backlinksTo,
   breadcrumbsOf,
   childrenOf,
+  recentPages,
   tasksOfPage,
   useWorkspace,
 } from '../workspace/store'
+import { EMPTY_SEARCH_INDEX, buildSearchIndex } from '../workspace/search'
+import { projectProgress, projectRollups } from '../workspace/projects'
 import { makeBlock } from '../workspace/blocks'
 
 /** Debounce before an autosave. Long enough to coalesce a typing burst, short
@@ -37,12 +44,13 @@ type Pane = 'tree' | 'recent' | 'search'
  * and a maximized one.
  */
 export default function NotesPage() {
-  const { pages, tasks, loading, error, savePage, deletePage, toggleTask } = useWorkspace()
+  const { pages, tasks, loading, error, savePage, deletePage, toggleTask, reload } = useWorkspace()
   const [openId, setOpenId] = useState('')
   const [pane, setPane] = useState<Pane>('tree')
   const [query, setQuery] = useState('')
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'failed'>('idle')
-  const { focus, clearFocus } = useFocusTarget()
+  const { focus, setFocus, clearFocus } = useFocusTarget()
+  const { navigate } = useNavigation()
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   /** The page being edited. Edits live here so typing never waits on a round
    *  trip; the backend copy is reconciled after each autosave. */
@@ -77,6 +85,16 @@ export default function NotesPage() {
     }
     clearFocus()
   }, [focus, pageList, clearFocus])
+
+  /** Jump to Tasks, optionally landing on one task. */
+  const openTask = useCallback(
+    (taskId: string) => {
+      navigate('tasks')
+      setFocus({ taskId })
+    },
+    [navigate, setFocus],
+  )
+  const openTasks = useCallback(() => navigate('tasks'), [navigate])
 
   const persist = useCallback(
     (page: Page) => {
@@ -138,12 +156,18 @@ export default function NotesPage() {
         tags: [],
         favorite: false,
         archived: false,
+        isProject: false,
         createdMs: 0,
         updatedMs: 0,
       }
-      const saved = await savePage(page)
-      setOpenId(saved.id)
-      setPane('tree')
+      try {
+        const saved = await savePage(page)
+        setOpenId(saved.id)
+        setPane('tree')
+      } catch {
+        // The store records the reason and `error` renders it below; an
+        // unhandled rejection here would leave the button looking dead.
+      }
     },
     [savePage],
   )
@@ -151,14 +175,29 @@ export default function NotesPage() {
   const remove = useCallback(async () => {
     if (!draft) return
     const id = draft.id
-    await deletePage(id)
-    setOpenId('')
-    setDraft(null)
+    try {
+      await deletePage(id)
+      setOpenId('')
+      setDraft(null)
+    } catch {
+      // Kept open on purpose: if the delete failed the page is still there,
+      // and clearing the editor would pretend otherwise.
+    }
   }, [draft, deletePage])
 
   const toggleFavorite = useCallback(() => {
     if (!draft) return
     edit({ favorite: !draft.favorite })
+  }, [draft, edit])
+
+  /**
+   * A page becomes a project by flag, not by being converted into a different
+   * kind of thing: the same id, blocks and children stay exactly where they
+   * were, and the tasks that already point at it keep working.
+   */
+  const toggleProject = useCallback(() => {
+    if (!draft) return
+    edit({ isProject: !draft.isProject })
   }, [draft, edit])
 
   const crumbs = useMemo(() => breadcrumbsOf(pageList, openId), [pageList, openId])
@@ -171,22 +210,41 @@ export default function NotesPage() {
     [taskList, draft],
   )
 
-  const recents = useMemo(
-    () =>
-      pageList
-        .filter((p) => !p.archived && p.updatedMs > 0)
-        .sort((a, b) => b.updatedMs - a.updatedMs)
-        .slice(0, 8),
-    [pageList],
-  )
+  const recents = useMemo(() => recentPages(pageList, 8), [pageList])
 
+  /**
+   * The in-sidebar filter reuses the shared index rather than re-implementing
+   * a title match: it therefore ranks and matches bodies and tags too, and
+   * cannot drift from what Ctrl+K shows for the same word. Built only while
+   * there is a query to run against it.
+   */
+  const pageIndex = useMemo(
+    () => (query.trim() ? buildSearchIndex(pageList, taskList) : EMPTY_SEARCH_INDEX),
+    [pageList, taskList, query],
+  )
   const searchResults = useMemo(() => {
-    const q = query.trim().toLowerCase()
+    const q = query.trim()
     if (!q) return []
-    return pageList
-      .filter((p) => !p.archived && (p.title.toLowerCase().includes(q) || p.tags.some((t) => t.includes(q))))
-      .slice(0, 40)
-  }, [pageList, query])
+    return pageIndex
+      .search(q, ['page', 'project'], 40)
+      .flatMap((g) => g.items)
+      .map((hit) => pageList.find((p) => p.id === hit.id))
+      .filter((p): p is Page => Boolean(p))
+  }, [pageIndex, pageList, query])
+
+  /** The project this page belongs to, when it is not one itself. */
+  const owningProject = useMemo(() => {
+    if (!draft?.parentId) return null
+    const chain = breadcrumbsOf(pageList, draft.parentId)
+    const project = [...chain].reverse().find((p) => p.isProject)
+    return project ?? null
+  }, [pageList, draft])
+
+  /** Progress for the open page, when it is a project. */
+  const ownProject = useMemo(
+    () => (draft?.isProject ? projectRollups(pageList, taskList).find((p) => p.id === draft.id) ?? null : null),
+    [pageList, taskList, draft],
+  )
 
   const favourites = useMemo(() => pageList.filter((p) => p.favorite && !p.archived), [pageList])
 
@@ -207,7 +265,7 @@ export default function NotesPage() {
   }
 
   return (
-    <div className="page workspace-page">
+    <div className="page">
       <div className="workspace-head">
         <div>
           <h1 className="page-title">Pages</h1>
@@ -238,6 +296,16 @@ export default function NotesPage() {
           </button>
         </div>
       </div>
+
+      {error && pages ? (
+        <div className="setting-note bad" role="alert">
+          <AlertCircle size={14} />
+          <span className="grow">{error}</span>
+          <button className="btn btn-ghost" onClick={() => void reload()}>
+            Try again
+          </button>
+        </div>
+      ) : null}
 
       {pageList.length === 0 ? (
         <div className="card" style={{ marginTop: 16 }}>
@@ -272,10 +340,18 @@ export default function NotesPage() {
             {pane === 'search' ? (
               <div className="tree-list">
                 {searchResults.length === 0 ? (
-                  <div className="tree-empty">No page matches “{query}”.</div>
+                  <div className="tree-empty">Nothing matches “{query}”.</div>
                 ) : (
                   searchResults.map((p) => (
-                    <TreeRow key={p.id} page={p} depth={0} active={p.id === openId} onOpen={setOpenId} onCreate={createPage} />
+                    <TreeRow
+                      key={p.id}
+                      page={p}
+                      depth={0}
+                      active={p.id === openId}
+                      query={query.trim()}
+                      onOpen={setOpenId}
+                      onCreate={createPage}
+                    />
                   ))
                 )}
               </div>
@@ -356,6 +432,19 @@ export default function NotesPage() {
                             : ''}
                     </span>
                     <button
+                      className={`btn btn-ghost${draft.isProject ? ' on' : ''}`}
+                      onClick={toggleProject}
+                      title={
+                        draft.isProject
+                          ? 'No longer a project'
+                          : 'Make this a project so it owns tasks'
+                      }
+                      aria-pressed={draft.isProject}
+                    >
+                      <FolderGit2 size={16} />
+                      {draft.isProject ? 'Project' : null}
+                    </button>
+                    <button
                       className={`btn btn-ghost${draft.favorite ? ' on' : ''}`}
                       onClick={toggleFavorite}
                       title={draft.favorite ? 'Remove from favourites' : 'Add to favourites'}
@@ -368,6 +457,24 @@ export default function NotesPage() {
                     </button>
                   </div>
                 </div>
+
+                {ownProject ? (
+                  <div className="page-project-bar">
+                    <FolderGit2 size={14} />
+                    <span className="page-project-label">{ownProject.title || 'Untitled project'}</span>
+                    <span className="page-project-count">
+                      {ownProject.taskDone}/{ownProject.taskCount} tasks
+                    </span>
+                    <Bar fraction={projectProgress(ownProject)} />
+                  </div>
+                ) : null}
+
+                {owningProject ? (
+                  <button className="page-breadcrumb-project" onClick={() => setOpenId(owningProject.id)}>
+                    <FolderGit2 size={13} />
+                    Part of <b>{owningProject.title || 'Untitled project'}</b>
+                  </button>
+                ) : null}
 
                 {draft.parentId ? null : (
                   <button
@@ -389,7 +496,14 @@ export default function NotesPage() {
 
                 <div className="page-context">
                   <div className="context-col">
-                    <div className="section-title">Tasks on this page</div>
+                    <div className="section-title">
+                      Tasks on this page
+                      {pageTasks.length > 8 ? (
+                        <button className="context-more" onClick={() => openTasks()}>
+                          All {pageTasks.length}
+                        </button>
+                      ) : null}
+                    </div>
                     {pageTasks.length === 0 ? (
                       <div className="context-empty">
                         Type <kbd>/</kbd> and pick <b>Task</b> to pull one in, or add one from Tasks.
@@ -397,15 +511,21 @@ export default function NotesPage() {
                     ) : (
                       <div className="row-list">
                         {pageTasks.slice(0, 8).map((t) => (
-                          <label key={t.id} className={`task-row mini${t.status === 'done' ? ' done' : ''}`}>
+                          <div key={t.id} className={`task-row mini${t.status === 'done' ? ' done' : ''}`}>
                             <input
                               type="checkbox"
                               checked={t.status === 'done'}
                               onChange={() => void toggleTask(t.id)}
                               aria-label={t.status === 'done' ? `Reopen ${t.title}` : `Complete ${t.title}`}
                             />
-                            <span className="task-title">{t.title}</span>
-                          </label>
+                            <button
+                              className="task-title task-title-button"
+                              onClick={() => openTask(t.id)}
+                              title={`Open ${t.title} in Tasks`}
+                            >
+                              {t.title}
+                            </button>
+                          </div>
                         ))}
                       </div>
                     )}
@@ -455,12 +575,15 @@ function TreeRow({
   active,
   onOpen,
   onCreate,
+  query,
 }: {
   page: Page
   depth: number
   active: boolean
   onOpen: (id: string) => void
   onCreate: (parentId: string) => Promise<void>
+  /** When set, the title is highlighted so the match is visible. */
+  query?: string
 }) {
   return (
     <button
@@ -470,8 +593,15 @@ function TreeRow({
       aria-current={active ? 'page' : undefined}
       title={page.title || 'Untitled'}
     >
-      <span className="tree-icon">{page.icon || '·'}</span>
-      <span className="tree-title">{page.title || 'Untitled'}</span>
+      <span className="tree-icon">{page.icon || (page.isProject ? '◈' : '·')}</span>
+      <span className="tree-title">
+        {query ? <Marked text={page.title || 'Untitled'} query={query} /> : page.title || 'Untitled'}
+      </span>
+      {page.isProject ? (
+        <span className="tree-tag" title="Project">
+          <FolderGit2 size={11} />
+        </span>
+      ) : null}
       <span
         className="tree-add"
         role="button"

@@ -1,4 +1,4 @@
-import type { Bridge, PageId, Prefs } from '../shared/types'
+import type { Bridge, Clip, PageId, Prefs } from '../shared/types'
 
 /**
  * Browser-harness only: matches package.json so About/Updates never lie.
@@ -130,6 +130,7 @@ function createBrowserHarnessBridge(): Bridge {
     getSettingsData: async () => ({
       prefs,
       storage: { file: '(browser preview)', bytes: 0, recovered: false, healthy: true },
+      workspace: { recovered: false, files: [] },
       version: HARNESS_VERSION,
       platform: 'browser',
       launch: { enabled: false, registered: false, pathMatches: false, needsRepair: false, registeredPath: null },
@@ -161,6 +162,8 @@ function createBrowserHarnessBridge(): Bridge {
     },
     notifyThemeClass: async () => undefined,
     exportJson: async () => ({ ok: false }),
+    exportWorkspace: async () => ({ ok: false, canceled: true }),
+    importWorkspace: async () => ({ ok: false, canceled: true }),
     clearData: async () => ({ ok: true }),
     toast: (cb) => {
       ;(listeners['toast'] ??= []).push(cb as (...args: unknown[]) => void)
@@ -207,6 +210,7 @@ function createBrowserHarnessBridge(): Bridge {
     pageSave: async (p) => p,
     pageDelete: async () => true,
     tasksList: async () => [],
+    onWorkspaceChanged: () => () => undefined,
     taskSave: async (t) => t,
     taskToggle: async () => null,
     taskDelete: async () => true,
@@ -217,8 +221,9 @@ function createBrowserHarnessBridge(): Bridge {
     clipsClear: async () => 0,
     clipPaste: async () => false,
     clipCapture: async () => null,
+    onClipCaptured: () => () => undefined,
     tagIndex: async () => ({}),
-    searchEverything: async () => [],
+    searchApps: async () => [],
     quickCapture: async (input) => ({ kind: 'page', title: input, id: '' }),
     fileRoots: async () => [],
     filesRecent: async () => [],
@@ -294,6 +299,10 @@ function createTauriBridge(): Bridge {
       invoke('set_pref', { key, value }) as Promise<Prefs>,
     notifyThemeClass: (glass) => invoke('notify_theme_class', { glass }) as Promise<void>,
     exportJson: () => invoke('export_json') as Promise<Awaited<ReturnType<Bridge['exportJson']>>>,
+    exportWorkspace: () =>
+      invoke('export_workspace') as Promise<Awaited<ReturnType<Bridge['exportWorkspace']>>>,
+    importWorkspace: () =>
+      invoke('import_workspace') as Promise<Awaited<ReturnType<Bridge['importWorkspace']>>>,
     clearData: () => invoke('clear_data') as Promise<{ ok: boolean; error?: string }>,
     toast: (cb) => sub<string>('oneboost://toast', cb),
     onPrefsChanged: (cb) => sub<Prefs>('oneboost://prefs-changed', cb),
@@ -315,6 +324,7 @@ function createTauriBridge(): Bridge {
     pageSave: (page) => invoke('page_save', { page }) as Promise<Awaited<ReturnType<Bridge['pageSave']>>>,
     pageDelete: (id) => invoke('page_delete', { id }) as Promise<boolean>,
     tasksList: () => invoke('tasks_list') as Promise<Awaited<ReturnType<Bridge['tasksList']>>>,
+    onWorkspaceChanged: (cb) => sub('oneboost://workspace-changed', cb),
     taskSave: (task) => invoke('task_save', { task }) as Promise<Awaited<ReturnType<Bridge['taskSave']>>>,
     taskToggle: (id) => invoke('task_toggle', { id }) as Promise<Awaited<ReturnType<Bridge['taskToggle']>>>,
     taskDelete: (id) => invoke('task_delete', { id }) as Promise<boolean>,
@@ -325,9 +335,9 @@ function createTauriBridge(): Bridge {
     clipsClear: () => invoke('clips_clear') as Promise<number>,
     clipPaste: (id) => invoke('clip_paste', { id }) as Promise<boolean>,
     clipCapture: () => invoke('clip_capture') as Promise<Awaited<ReturnType<Bridge['clipCapture']>>>,
+    onClipCaptured: (cb) => sub<Clip>('oneboost://clip-captured', cb),
     tagIndex: () => invoke('tag_index') as Promise<Awaited<ReturnType<Bridge['tagIndex']>>>,
-    searchEverything: (query) =>
-      invoke('search_everything', { query }) as Promise<Awaited<ReturnType<Bridge['searchEverything']>>>,
+    searchApps: (query) => invoke('search_apps', { query }) as Promise<Awaited<ReturnType<Bridge['searchApps']>>>,
     quickCapture: (input) =>
       invoke('quick_capture', { input }) as Promise<Awaited<ReturnType<Bridge['quickCapture']>>>,
     fileRoots: () => invoke('file_roots') as Promise<Awaited<ReturnType<Bridge['fileRoots']>>>,

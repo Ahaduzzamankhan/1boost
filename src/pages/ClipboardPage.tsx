@@ -3,6 +3,7 @@ import { ClipboardList, Copy, Pin, PinOff, RefreshCw, Search, Trash2, X } from '
 import type { Clip } from '../../shared/types'
 import { bridge } from '../bridge'
 import { EmptyState } from '../components/ui'
+import { scoreMatch } from '../workspace/search'
 
 function ago(ts: number): string {
   const min = Math.round((Date.now() - ts) / 60000)
@@ -32,18 +33,27 @@ export default function ClipboardPage() {
     }
   }, [])
 
+  // The backend records new entries continuously and pushes each one as it
+  // lands. Subscribing replaced a three-second poll that re-fetched the whole
+  // history — an IPC round trip and a full re-render for every copy the user
+  // made, whether or not this page was even open.
   useEffect(() => {
     void load()
-    // The backend records new clipboard entries continuously; poll so the
-    // list fills in while the page is open.
-    const timer = setInterval(() => void load(), 3000)
-    return () => clearInterval(timer)
+    return bridge.onClipCaptured((clip) => {
+      setClips((cur) => {
+        if (!cur) return [clip]
+        // The push is the source of truth, but a manual refresh may already
+        // have the entry; duplicates in a history look like a bug.
+        if (cur.some((c) => c.id === clip.id)) return cur
+        return [clip, ...cur]
+      })
+    })
   }, [load])
 
   const visible = useMemo(() => {
-    const q = query.trim().toLowerCase()
+    const q = query.trim()
     if (!q) return clips ?? []
-    return (clips ?? []).filter((c) => c.text.toLowerCase().includes(q))
+    return (clips ?? []).filter((c) => scoreMatch(c.text, q) >= 0)
   }, [clips, query])
 
   const copy = async (c: Clip) => {

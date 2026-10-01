@@ -10,7 +10,9 @@ import {
   Cpu,
   Expand,
   FileText,
+  FolderGit2,
   HardDrive,
+  Keyboard,
   LayoutDashboard,
   ListChecks,
   MemoryStick,
@@ -19,34 +21,78 @@ import {
   Search,
   Timer,
 } from 'lucide-react'
-import type { MonitorSample, TrendPoint } from '../../shared/types'
-import { useDashboard } from '../state'
+import type { MonitorSample, Task, TrendPoint } from '../../shared/types'
+import { useDashboard, useNavigation } from '../state'
 import { bridge } from '../bridge'
 import { formatDuration, formatDayRelative } from '../lib/format'
 import { HourChart, TrendChart } from '../components/charts'
 import { AppIcon, Bar, Chip, EmptyState, PageHeader, Segmented } from '../components/ui'
-import { relative, todaysTasks, recentPages, useWorkspace } from '../workspace/store'
 import { useFocusTarget } from '../nav'
+import { useWorkspace } from '../workspace/store'
+import { dueLabel, recentPages, relative, todaysTasks, upcomingTasks } from '../workspace/helpers'
+import { projectProgress, projectRollups, type ProjectRollup } from '../workspace/projects'
 
 type Range = 'today' | '7d' | '30d' | 'all'
 
 /** Days each range asks the backend for. `all` means "every day on record". */
 const RANGE_DAYS: Record<Exclude<Range, 'today'>, number> = { '7d': 7, '30d': 30, all: 0 }
 
+/** How far ahead "upcoming" reaches. A week is a planning horizon people use. */
+const UPCOMING_DAYS = 7
+
 /**
  * The dashboard is the home of 1Boost, not a statistics screen.
  *
- * It answers three questions in order: what am I supposed to be doing right
- * now (today's tasks), what have I been doing (time, apps), and is the machine
- * healthy (live system). Everything else is one click away.
+ * It answers four questions in order: what am I supposed to be doing right
+ * now, what is coming, what have I been working on, and is the machine
+ * healthy. Everything else — pages, projects, the full statistics, the system
+ * view — is one click away through the cross-links.
+ *
+ * Nothing here fetches its own copy of the workspace: it reads the shared
+ * store, so completing a task anywhere in the app is reflected here on the
+ * next paint rather than after a reload.
  */
 export default function DashboardPage() {
-  const { dashboard, snapshot } = useDashboard(null)
-  const { tasks, pages, toggleTask } = useWorkspace()
+  const { dashboard, snapshot } = useDashboard()
+  const { tasks, pages, toggleTask, createPage, busy } = useWorkspace()
+  const { navigate } = useNavigation()
   const { setFocus } = useFocusTarget()
   const [range, setRange] = useState<Range>('7d')
   const [trend, setTrend] = useState<TrendPoint[] | null>(null)
   const [monitor, setMonitor] = useState<MonitorSample | null>(null)
+
+  const openPage = useCallback(
+    (id: string) => {
+      navigate('notes')
+      setFocus({ pageId: id })
+    },
+    [navigate, setFocus],
+  )
+
+  const openTask = useCallback(
+    (id: string) => {
+      navigate('tasks')
+      setFocus({ taskId: id })
+    },
+    [navigate, setFocus],
+  )
+
+  /**
+   * Create a page (or a project) and open it.
+   *
+   * The store already records why a save failed; the catch here exists so a
+   * failed quick action does not surface as an unhandled rejection with no
+   * feedback at all — the page simply does not appear, and the store's error
+   * is what the user sees in the module that failed.
+   */
+  const newPage = useCallback(
+    (isProject: boolean) => {
+      void createPage({ isProject })
+        .then((page) => openPage(page.id))
+        .catch(() => undefined)
+    },
+    [createPage, openPage],
+  )
 
   // Ask the backend for exactly the window that was chosen. Slicing the
   // dashboard payload capped the chart at whatever the retention pref
@@ -105,16 +151,25 @@ export default function DashboardPage() {
     return 'Good evening'
   }, [])
 
-  const totalAppMs = useMemo(
-    () => (dashboard?.apps ?? []).reduce((sum, app) => sum + app.ms, 0),
-    [dashboard],
+  const apps = dashboard?.apps ?? []
+  const totalAppMs = useMemo(() => apps.reduce((sum, app) => sum + app.ms, 0), [apps])
+
+  const today = useMemo(() => todaysTasks(tasks ?? []), [tasks])
+  const upcoming = useMemo(() => upcomingTasks(tasks ?? [], UPCOMING_DAYS), [tasks])
+  const recent = useMemo(() => recentPages(pages ?? [], 5), [pages])
+  const projects = useMemo<ProjectRollup[]>(() => projectRollups(pages ?? [], tasks ?? []), [pages, tasks])
+  const overdue = useMemo(
+    () => (tasks ?? []).filter((t) => t.status !== 'done' && dueLabel(t.dueMs).late).length,
+    [tasks],
   )
 
-  const apps = dashboard?.apps ?? []
-  const today = useMemo(() => todaysTasks(tasks ?? []), [tasks])
-  const recent = useMemo(() => recentPages(pages ?? [], 5), [pages])
-
-  if (!dashboard) return null
+  if (!dashboard) {
+    return (
+      <div className="page">
+        <div className="module-loading">Loading your day…</div>
+      </div>
+    )
+  }
 
   return (
     <div className="page">
@@ -130,14 +185,51 @@ export default function DashboardPage() {
         }
       />
 
+      {/* One click from any state the user is most likely to be in. */}
+      <div className="quick-row">
+        <QuickAction
+          icon={<Search size={15} />}
+          label="Search"
+          hint="Ctrl K"
+          onClick={() => navigate('search')}
+        />
+        <QuickAction
+          icon={<Plus size={15} />}
+          label="New page"
+          hint={busy ? 'Saving…' : 'Ctrl K'}
+          disabled={busy}
+          onClick={() => newPage(false)}
+        />
+        <QuickAction
+          icon={<FolderGit2 size={15} />}
+          label="New project"
+          hint={busy ? 'Saving…' : 'Ctrl K'}
+          disabled={busy}
+          onClick={() => newPage(true)}
+        />
+        <QuickAction
+          icon={<ListChecks size={15} />}
+          label="Tasks"
+          hint="N"
+          onClick={() => navigate('tasks')}
+        />
+        <QuickAction
+          icon={<Activity size={15} />}
+          label="System"
+          hint={monitor ? `${Math.round(monitor.cpu.usage ?? 0)}% CPU` : 'Live'}
+          onClick={() => navigate('monitor')}
+        />
+      </div>
+
       {/* Today: the work, not the statistics. */}
       <div className="home-split">
         <section className="card today-card">
           <div className="card-head">
             <h2 className="section-title" style={{ margin: 0 }}>
               <ListChecks size={15} /> Today
+              {overdue > 0 ? <span className="card-count warn">{overdue} overdue</span> : null}
             </h2>
-            <button className="btn btn-ghost" onClick={() => bridge.navigate('tasks')}>
+            <button className="btn btn-ghost" onClick={() => navigate('tasks')}>
               All tasks <ChevronRight size={14} />
             </button>
           </div>
@@ -150,19 +242,10 @@ export default function DashboardPage() {
           ) : (
             <div className="row-list">
               {today.slice(0, 7).map((t) => (
-                <label key={t.id} className="task-row mini">
-                  <input
-                    type="checkbox"
-                    checked={t.status === 'done'}
-                    onChange={() => void toggleTask(t.id)}
-                    aria-label={t.status === 'done' ? `Reopen ${t.title}` : `Complete ${t.title}`}
-                  />
-                  <span className="task-title">{t.title}</span>
-                  {t.priority > 0 ? <span className={`prio-tag p${t.priority}`}>P{t.priority}</span> : null}
-                </label>
+                <TaskRow key={t.id} task={t} onToggle={toggleTask} onOpen={openTask} />
               ))}
               {today.length > 7 ? (
-                <button className="context-link" onClick={() => bridge.navigate('tasks')}>
+                <button className="context-link" onClick={() => navigate('tasks')}>
                   {today.length - 7} more today <ChevronRight size={12} />
                 </button>
               ) : null}
@@ -173,9 +256,40 @@ export default function DashboardPage() {
         <section className="card today-card">
           <div className="card-head">
             <h2 className="section-title" style={{ margin: 0 }}>
+              <Timer size={15} /> Upcoming
+            </h2>
+            <button className="btn btn-ghost" onClick={() => navigate('calendar')}>
+              Calendar <ChevronRight size={14} />
+            </button>
+          </div>
+          {upcoming.length === 0 ? (
+            <EmptyState
+              icon={<Timer size={22} />}
+              title={`Nothing in the next ${UPCOMING_DAYS} days`}
+              desc="Give a task a due date and it will appear here the day before it is due."
+            />
+          ) : (
+            <div className="row-list">
+              {upcoming.slice(0, 7).map((t) => (
+                <TaskRow key={t.id} task={t} onToggle={toggleTask} onOpen={openTask} />
+              ))}
+              {upcoming.length > 7 ? (
+                <button className="context-link" onClick={() => navigate('tasks')}>
+                  {upcoming.length - 7} more coming up <ChevronRight size={12} />
+                </button>
+              ) : null}
+            </div>
+          )}
+        </section>
+      </div>
+
+      <div className="home-split">
+        <section className="card today-card">
+          <div className="card-head">
+            <h2 className="section-title" style={{ margin: 0 }}>
               <FileText size={15} /> Recent work
             </h2>
-            <button className="btn btn-ghost" onClick={() => bridge.navigate('notes')}>
+            <button className="btn btn-ghost" onClick={() => navigate('notes')}>
               All pages <ChevronRight size={14} />
             </button>
           </div>
@@ -185,7 +299,11 @@ export default function DashboardPage() {
               title="No pages yet"
               desc="Pages hold your notes, plans and the tasks attached to them."
               action={
-                <button className="btn btn-secondary" onClick={() => bridge.navigate('notes')}>
+                <button
+                  className="btn btn-secondary"
+                  disabled={busy}
+                  onClick={() => newPage(false)}
+                >
                   <Plus size={14} /> Write one
                 </button>
               }
@@ -196,18 +314,65 @@ export default function DashboardPage() {
                 <button
                   key={p.id}
                   className="context-link"
-                  onClick={() => {
-                    // Hand the page id along, so "recent work" actually opens
-                    // that page rather than whichever one happened to be open.
-                    bridge.navigate('notes')
-                    setFocus({ pageId: p.id })
-                  }}
+                  title={p.isProject ? 'Open project' : 'Open page'}
+                  onClick={() => openPage(p.id)}
                 >
                   <span>
                     {p.icon ? `${p.icon} ` : ''}
                     {p.title || 'Untitled'}
+                    {p.isProject ? (
+                      <span className="row-tag">Project</span>
+                    ) : null}
                   </span>
                   <span className="context-meta">{relative(p.updatedMs)}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="card today-card">
+          <div className="card-head">
+            <h2 className="section-title" style={{ margin: 0 }}>
+              <FolderGit2 size={15} /> Projects
+            </h2>
+            <button className="btn btn-ghost" onClick={() => navigate('notes')}>
+              Open pages <ChevronRight size={14} />
+            </button>
+          </div>
+          {projects.length === 0 ? (
+            <EmptyState
+              icon={<FolderGit2 size={22} />}
+              title="No projects yet"
+              desc="A project is a page that owns tasks, so plans and the work behind them stay together."
+              action={
+                <button
+                  className="btn btn-secondary"
+                  disabled={busy}
+                  onClick={() => newPage(true)}
+                >
+                  <Plus size={14} /> Start one
+                </button>
+              }
+            />
+          ) : (
+            <div className="row-list">
+              {projects.slice(0, 6).map((p) => (
+                <button key={p.id} className="project-row" onClick={() => openPage(p.id)}>
+                  <span className="project-row-head">
+                    <span className="project-row-title">
+                      {p.icon ? `${p.icon} ` : ''}
+                      {p.title || 'Untitled project'}
+                    </span>
+                    <span className="project-row-count">
+                      {p.taskDone}/{p.taskCount}
+                    </span>
+                  </span>
+                  <Bar fraction={projectProgress(p)} />
+                  <span className="project-row-meta">
+                    {p.pageCount > 0 ? `${p.pageCount} page${p.pageCount === 1 ? '' : 's'}` : 'No pages yet'}
+                    <span className="context-meta">{relative(p.updatedMs)}</span>
+                  </span>
                 </button>
               ))}
             </div>
@@ -249,9 +414,7 @@ export default function DashboardPage() {
           <div className="metric-label">
             <Timer size={13} /> Current app
           </div>
-          <div className="metric-value metric-value-sm">
-            {snapshot?.appName || '—'}
-          </div>
+          <div className="metric-value metric-value-sm">{snapshot?.appName || '—'}</div>
           <div className="metric-sub">
             {snapshot?.appStartMs
               ? `${formatDuration(Math.max(0, Date.now() - snapshot.appStartMs))} in it`
@@ -368,24 +531,80 @@ export default function DashboardPage() {
         </div>
 
         <div className="card shortcuts-card">
-          <h2 className="section-title">Shortcuts</h2>
+          <h2 className="section-title">
+            <Keyboard size={15} /> Shortcuts
+          </h2>
           <div className="shortcut-list">
-            <Shortcut keys="Ctrl K" what="Search everything" onClick={() => bridge.navigate('tasks')} />
+            <Shortcut keys="Ctrl K" what="Command center" onClick={() => navigate('search')} />
+            {/* No jump target: capture is an overlay the shell owns, so the
+                shortcut itself is the only thing that can open it. */}
             <Shortcut keys="Ctrl ⇧ Space" what="Quick capture" />
-            <Shortcut keys="N" what="New task (in Tasks)" onClick={() => bridge.navigate('tasks')} />
-            <Shortcut keys="/" what="Block menu in the editor" onClick={() => bridge.navigate('notes')} />
+            <Shortcut keys="N" what="New task (in Tasks)" onClick={() => navigate('tasks')} />
+            <Shortcut keys="/" what="Block menu in the editor" onClick={() => navigate('notes')} />
           </div>
           <div className="shortcut-list">
-            <button className="btn btn-secondary" onClick={() => bridge.navigate('monitor')}>
+            <button className="btn btn-secondary" onClick={() => navigate('monitor')}>
               <Activity size={14} /> Full system view
             </button>
-            <button className="btn btn-secondary" onClick={() => bridge.navigate('stats')}>
+            <button className="btn btn-secondary" onClick={() => navigate('stats')}>
               <Clock size={14} /> Statistics
             </button>
           </div>
         </div>
       </div>
     </div>
+  )
+}
+
+/** A dashboard task, with the project it belongs to as a cross-link. */
+function TaskRow({
+  task,
+  onToggle,
+  onOpen,
+}: {
+  task: Task
+  onToggle: (id: string) => void | Promise<unknown>
+  onOpen: (id: string) => void
+}) {
+  const due = dueLabel(task.dueMs)
+  return (
+    <div className="task-row mini">
+      <input
+        type="checkbox"
+        checked={task.status === 'done'}
+        onChange={() => void onToggle(task.id)}
+        aria-label={task.status === 'done' ? `Reopen ${task.title}` : `Complete ${task.title}`}
+      />
+      <button className="task-title task-title-button" onClick={() => onOpen(task.id)} title={task.title}>
+        {task.title}
+      </button>
+      {task.priority > 0 ? <span className={`prio-tag p${task.priority}`}>P{task.priority}</span> : null}
+      {due.text ? (
+        <span className={`due-tag${due.late ? ' late' : ''}`}>{due.text}</span>
+      ) : null}
+    </div>
+  )
+}
+
+function QuickAction({
+  icon,
+  label,
+  hint,
+  onClick,
+  disabled,
+}: {
+  icon: React.ReactNode
+  label: string
+  hint: string
+  onClick: () => void
+  disabled?: boolean
+}) {
+  return (
+    <button className="quick-action" onClick={onClick} disabled={disabled}>
+      <span className="quick-action-icon">{icon}</span>
+      <span className="quick-action-label">{label}</span>
+      <kbd className="quick-action-hint">{hint}</kbd>
+    </button>
   )
 }
 
@@ -397,6 +616,7 @@ function SystemStrip({
   monitor: MonitorSample | null
   snapshotError: string | null
 }) {
+  const { navigate } = useNavigation()
   if (!monitor) {
     return (
       <div className="system-strip">
@@ -407,9 +627,10 @@ function SystemStrip({
     )
   }
   const pct = (v: number | null) => (v == null ? '—' : `${Math.round(v)}%`)
-  const memUsedPct = monitor.memory.totalBytes > 0
-    ? Math.round((monitor.memory.usedBytes / monitor.memory.totalBytes) * 100)
-    : 0
+  const memUsedPct =
+    monitor.memory.totalBytes > 0
+      ? Math.round((monitor.memory.usedBytes / monitor.memory.totalBytes) * 100)
+      : 0
   const tightest = [...monitor.drives]
     .filter((d) => d.totalBytes > 0)
     .sort((a, b) => a.freeBytes / a.totalBytes - b.freeBytes / b.totalBytes)[0]
@@ -434,7 +655,7 @@ function SystemStrip({
           <AlertCircle size={14} /> {snapshotError}
         </span>
       ) : (
-        <button className="sys-item link" onClick={() => bridge.navigate('monitor')}>
+        <button className="sys-item link" onClick={() => navigate('monitor')}>
           Open Monitor <ChevronRight size={13} />
         </button>
       )}
@@ -449,10 +670,9 @@ function Shortcut({ keys, what, onClick }: { keys: string; what: string; onClick
       <span className="grow">{what}</span>
       {onClick ? (
         <button className="btn btn-ghost" onClick={onClick} aria-label={`Go to ${what}`}>
-          <Search size={13} />
+          <ChevronRight size={13} />
         </button>
       ) : null}
     </div>
   )
 }
-

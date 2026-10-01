@@ -4,7 +4,9 @@
 // behaviour, the undo stack, and the custom-CSS sanitizer (whose safety claim
 // is the only reason the feature is acceptable at all). These pin them.
 import { describe, expect, it } from 'vitest'
-import type { Block, Task } from '../shared/types'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import type { Block, Page, Task } from '../shared/types'
 import {
   BlockHistory,
   SLASH_ITEMS,
@@ -35,13 +37,17 @@ import {
   subtasksOf,
   tasksOfPage,
 } from '../src/workspace/helpers'
-import { sanitizeCss } from '../src/customCss'
+import { buildSearchIndex, highlightParts } from '../src/workspace/search'
+import { projectProgress, projectRollups } from '../src/workspace/projects'
+import { sanitizeCss, CUSTOM_CSS_VARIABLES } from '../src/customCss'
+
+const root = join(__dirname, '..')
 
 function b(kind: Block['kind'], text: string): Block {
   return makeBlock(kind, text)
 }
 
-function page(over: Partial<Parameters<typeof childrenOf>[0][number]> = {}) {
+function page(over: Partial<Page> = {}): Page {
   return {
     id: 'p1',
     title: 'Page',
@@ -51,6 +57,7 @@ function page(over: Partial<Parameters<typeof childrenOf>[0][number]> = {}) {
     tags: [],
     favorite: false,
     archived: false,
+    isProject: false,
     createdMs: 0,
     updatedMs: 0,
     ...over,
@@ -429,6 +436,124 @@ describe('due dates', () => {
   })
 })
 
+describe('the shared search index', () => {
+  const pages = [
+    page({ id: 'p1', title: 'Roadmap', updatedMs: 100, blocks: [b('paragraph', 'ship the editor')] }),
+    page({ id: 'p2', title: 'Launch', isProject: true, updatedMs: 200 }),
+    page({ id: 'p3', title: 'Old plan', archived: true, updatedMs: 900 }),
+  ]
+  const tasks = [
+    task({ id: 't1', title: 'Write the roadmap', projectId: 'p2', updatedMs: 50 }),
+    task({ id: 't2', title: 'Call the printer', dueMs: startOfDay(Date.now()) + 86_400_000, updatedMs: 5 }),
+    task({ id: 't4', title: 'Pay rent', dueMs: startOfDay(Date.now()) + 3_600_000, updatedMs: 6 }),
+    task({ id: 't5', title: 'Lapsed', dueMs: startOfDay(Date.now()) - 86_400_000, updatedMs: 7 }),
+    task({ id: 't3', title: 'Undated', updatedMs: 400 }),
+  ]
+  const index = buildSearchIndex(pages, tasks)
+
+  it('classifies a project page as a project, not a page', () => {
+    expect(index.search('launch')[0].items[0].kind).toBe('project')
+    expect(index.search('roadmap')[0].items[0].kind).toBe('page')
+  })
+
+  it('leaves archived pages out entirely', () => {
+    // An archived page is deliberately out of the way; search must not be a
+    // way around that.
+    expect(index.items.some((i) => i.id === 'p3')).toBe(false)
+  })
+
+  it('ranks an exact title above a scattered match', () => {
+    const groups = index.search('roadmap')
+    const items = groups.flatMap((g) => g.items)
+    expect(items[0].title).toBe('Roadmap')
+  })
+
+  it('searches a task by the project it belongs to', () => {
+    const hits = index.search('Launch').flatMap((g) => g.items)
+    expect(hits.some((h) => h.kind === 'task' && h.id === 't1')).toBe(true)
+  })
+
+  it('narrows to one kind when a scope is given', () => {
+    const kinds = new Set(index.search('a', ['task']).flatMap((g) => g.items).map((i) => i.kind))
+    expect([...kinds]).toEqual(['task'])
+  })
+
+  it('returns nothing for an empty query rather than everything', () => {
+    // Otherwise the command center's "no query" state would be flooded.
+    expect(index.search('   ')).toEqual([])
+  })
+
+  it('orders recents newest first, per kind', () => {
+    expect(index.recent('task', 2).map((i) => i.id)).toEqual(['t3', 't1'])
+  })
+
+  it('filters the agenda by query without losing the day grouping', () => {
+    const groups = index.calendar('rent')
+    expect(groups.map((g) => g.label)).toEqual(['Today'])
+  })
+
+  it('buckets dated tasks into an agenda, most urgent first', () => {
+    const groups = index.calendar()
+    expect(groups.map((g) => g.label)).toEqual(['Overdue', 'Today', 'Tomorrow'])
+    expect(groups[0].items.map((i) => i.id)).toEqual(['t5'])
+    // An undated task is not a calendar entry.
+    expect(groups.flatMap((g) => g.items).map((i) => i.id)).not.toContain('t3')
+  })
+
+  it('highlights only what actually matched', () => {
+    expect(highlightParts('Roadmap', 'road')).toEqual([
+      { text: 'Road', hit: true },
+      { text: 'map', hit: false },
+    ])
+    expect(highlightParts('Roadmap', '')).toEqual([{ text: 'Roadmap', hit: false }])
+  })
+})
+
+describe('project rollups', () => {
+  const pages = [
+    page({ id: 'proj', title: 'Launch', isProject: true, updatedMs: 10 }),
+    page({ id: 'plan', title: 'Plan', parentId: 'proj', updatedMs: 20 }),
+    page({ id: 'deep', title: 'Deep', parentId: 'plan' }),
+    page({ id: 'scratch', title: 'Scratch' }),
+    page({ id: 'gone', title: 'Gone project', isProject: true, archived: true }),
+  ]
+  const tasks = [
+    task({ id: 'a', projectId: 'proj' }),
+    task({ id: 'b', projectId: 'proj', status: 'done' }),
+    task({ id: 'loose', title: 'Unfiled' }),
+  ]
+
+  it('counts a project’s own tasks, not everything in the workspace', () => {
+    const [p] = projectRollups(pages, tasks)
+    expect(p.id).toBe('proj')
+    expect(p.taskCount).toBe(2)
+    expect(p.taskDone).toBe(1)
+    expect(p.taskOpen).toBe(1)
+  })
+
+  it('includes pages nested at any depth', () => {
+    const [p] = projectRollups(pages, tasks)
+    expect(p.pageCount).toBe(2)
+    expect(p.pageIds.sort()).toEqual(['deep', 'plan'])
+  })
+
+  it('excludes archived projects and ordinary pages', () => {
+    expect(projectRollups(pages, tasks).map((p) => p.id)).toEqual(['proj'])
+  })
+
+  it('reports an empty project as not started rather than finished', () => {
+    const [p] = projectRollups([page({ id: 'proj', isProject: true })], [])
+    expect(projectProgress(p)).toBe(0)
+  })
+
+  it('cannot loop forever on a cyclic page tree', () => {
+    // A corrupted file must not hang the dashboard.
+    const cyclic = [page({ id: 'a', parentId: 'b' }), page({ id: 'b', parentId: 'a' })]
+    const rollups = projectRollups(cyclic, [])
+    expect(rollups).toHaveLength(0)
+  })
+})
+
 describe('the custom CSS layer', () => {
   it('keeps ordinary rules untouched', () => {
     const css = ':root { --radius-md: 4px; }\n.card { border-radius: 2px; }'
@@ -471,8 +596,47 @@ describe('the custom CSS layer', () => {
     expect(out).toContain('.card')
   })
 
+  it('will not let a customization hide the whole application', () => {
+    // The editor that could undo this lives inside the app, so a blank window
+    // is unrecoverable — not a style choice.
+    for (const selector of ['html', 'body', ':root', '.app', '#root']) {
+      const out = sanitizeCss(`${selector} { display: none }`)
+      expect(out, `${selector} was allowed to hide the app`).not.toContain('display: none')
+    }
+    expect(sanitizeCss('body { visibility: hidden }')).not.toContain('visibility:hidden')
+    expect(sanitizeCss(':root { opacity: 0 }')).not.toMatch(/opacity:\s*0\s*[;}]/)
+  })
+
+  it('still lets a customization hide any ordinary part of the UI', () => {
+    // Only the containers themselves are protected; a slimmer window is a
+    // legitimate thing to want.
+    expect(sanitizeCss('.sidebar { display: none }')).toContain('display: none')
+    expect(sanitizeCss('.card { display: none } .card { color: red }')).toContain('display: none')
+    // A descendant of the shell is not the shell.
+    expect(sanitizeCss('.app .sidebar { display: none }')).toContain('display: none')
+  })
+
   it('does not choke on unbalanced braces', () => {
     expect(() => sanitizeCss('.card { color: red')).not.toThrow()
     expect(() => sanitizeCss('@media screen { .a { b: c } }')).not.toThrow()
+  })
+
+  it('documents only variables the stylesheet actually defines', () => {
+    // A documented variable that does not exist is a promise the app cannot
+    // keep: people paste it, see no change, and conclude the feature is broken.
+    const css = readFileSync(join(root, 'src/index.css'), 'utf8')
+    const defined = new Set([...css.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1]))
+    for (const { name } of CUSTOM_CSS_VARIABLES) {
+      expect(defined, `${name} is documented but not defined`).toContain(name)
+    }
+  })
+
+  it('never reuses one name for a colour and a size', () => {
+    // `--text-secondary` was declared twice in `:root`, so the typography
+    // value was overwritten before anything could read it.
+    const css = readFileSync(join(root, 'src/index.css'), 'utf8')
+    const rootBlock = css.slice(css.indexOf(':root'), css.indexOf('}', css.indexOf(':root')))
+    const names = [...rootBlock.matchAll(/^\s*(--[a-z0-9-]+)\s*:/gm)].map((m) => m[1])
+    expect(new Set(names).size).toBe(names.length)
   })
 })

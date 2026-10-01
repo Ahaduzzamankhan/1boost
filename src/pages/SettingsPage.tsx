@@ -10,6 +10,7 @@ import {
   Download,
   Trash2,
   FolderOpen,
+  Upload,
   Wrench,
   AlertCircle,
   RefreshCw,
@@ -17,10 +18,11 @@ import {
   CheckCircle2,
   Brush,
 } from 'lucide-react'
-import type { LaunchState, Prefs, ThemeId, UpdateState } from '../../shared/types'
+import type { LaunchState, Prefs, ThemeId, UpdateState, WorkspaceImport } from '../../shared/types'
 import { bridge } from '../bridge'
 import { Slider, Toggle } from '../components/ui'
 import { CUSTOM_CSS_SELECTORS, CUSTOM_CSS_VARIABLES, sanitizeCss } from '../customCss'
+import { formatBytes } from '../lib/format'
 
 const THEMES: { id: ThemeId; name: string; preview: { bg: string; bar: string; card: string; glass: boolean } }[] = [
   {
@@ -71,6 +73,18 @@ export default function SettingsPage({
     canceled?: boolean
     error?: string
   } | null>(null)
+  const [importing, setImporting] = useState(false)
+  const [importResult, setImportResult] = useState<WorkspaceImport | null>(null)
+  const [workspaceExport, setWorkspaceExport] = useState<{
+    ok: boolean
+    path?: string
+    canceled?: boolean
+    error?: string
+  } | null>(null)
+  const [workspace, setWorkspace] = useState<{
+    recovered: boolean
+    files: { name: string; bytes: number }[]
+  } | null>(null)
   const [launch, setLaunch] = useState<LaunchState | null>(null)
   const [repairing, setRepairing] = useState(false)
   const [update, setUpdate] = useState<UpdateState | null>(null)
@@ -92,6 +106,19 @@ export default function SettingsPage({
   useEffect(() => {
     void refreshLaunch()
   }, [refreshLaunch, prefs.launchAtLogin])
+
+  // Workspace health is fetched once: it only changes when files are written,
+  // and the data panel is not a live monitor.
+  useEffect(() => {
+    let alive = true
+    bridge
+      .getSettingsData()
+      .then((d) => alive && setWorkspace(d.workspace))
+      .catch(() => undefined)
+    return () => {
+      alive = false
+    }
+  }, [])
 
   const repairLaunch = useCallback(async () => {
     setRepairing(true)
@@ -318,7 +345,7 @@ export default function SettingsPage({
         <div className="card">
           <div className="setting-row">
             <div className="setting-info">
-              <div className="setting-title">Export data</div>
+              <div className="setting-title">Export usage data</div>
               <div className="setting-desc">Save all recorded usage as a JSON file.</div>
             </div>
             <button
@@ -372,17 +399,151 @@ export default function SettingsPage({
           ) : null}
           <div className="setting-row">
             <div className="setting-info">
-              <div className="setting-title">Data file</div>
+              <div className="setting-title">Workspace backup</div>
+              <div className="setting-desc">
+                Pages, projects, tasks and clipboard history in one file. Importing only ever adds
+                work — anything already here is kept — so a restore can never overwrite work you
+                have done since the backup was taken.
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button
+                className="btn btn-secondary"
+                disabled={exporting}
+                onClick={async () => {
+                  setExporting(true)
+                  try {
+                    setWorkspaceExport(await bridge.exportWorkspace())
+                  } catch (e) {
+                    setWorkspaceExport({
+                      ok: false,
+                      error: e instanceof Error ? e.message : 'The export could not be started.',
+                    })
+                  } finally {
+                    setExporting(false)
+                  }
+                }}
+              >
+                <Download size={15} /> Export workspace
+              </button>
+              <button
+                className="btn btn-secondary"
+                disabled={importing}
+                onClick={async () => {
+                  setImporting(true)
+                  setImportResult(null)
+                  try {
+                    const res = await bridge.importWorkspace()
+                    setImportResult(res)
+                  } catch (e) {
+                    setImportResult({
+                      ok: false,
+                      canceled: false,
+                      error: e instanceof Error ? e.message : 'The import could not be started.',
+                    })
+                  } finally {
+                    setImporting(false)
+                  }
+                }}
+              >
+                <Upload size={15} /> {importing ? 'Importing…' : 'Import workspace'}
+              </button>
+            </div>
+          </div>
+          {workspaceExport ? (
+            <div className={`setting-note${workspaceExport.ok ? ' ok' : ' bad'}`} role="status">
+              {workspaceExport.ok ? (
+                <>
+                  <CheckCircle2 size={14} />
+                  <span className="selectable grow">Workspace saved to {workspaceExport.path}</span>
+                  {workspaceExport.path ? (
+                    <button
+                      className="btn btn-ghost"
+                      onClick={() => void bridge.openFile(workspaceExport.path as string, true)}
+                    >
+                      <FolderOpen size={14} /> Show
+                    </button>
+                  ) : null}
+                </>
+              ) : workspaceExport.canceled ? (
+                <span className="muted">Export canceled.</span>
+              ) : (
+                <>
+                  <AlertCircle size={14} />
+                  <span className="grow">{workspaceExport.error ?? 'The export failed.'}</span>
+                </>
+              )}
+            </div>
+          ) : null}
+          {importResult ? (
+            <div className={`setting-note${importResult.ok ? ' ok' : ' bad'}`} role="status">
+              {importResult.ok ? (
+                <>
+                  <CheckCircle2 size={14} />
+                  <span className="grow">
+                    Added {importResult.summary?.pages ?? 0} page(s),{' '}
+                    {importResult.summary?.tasks ?? 0} task(s) and{' '}
+                    {importResult.summary?.clips ?? 0} clipboard item(s)
+                    {importResult.summary?.skipped
+                      ? `; ${importResult.summary.skipped} already present and left alone`
+                      : ''}
+                    .
+                  </span>
+                </>
+              ) : importResult.canceled ? (
+                <span className="muted">Import canceled.</span>
+              ) : (
+                <>
+                  <AlertCircle size={14} />
+                  <span className="grow">{importResult.error ?? 'The import failed.'}</span>
+                </>
+              )}
+            </div>
+          ) : null}
+
+          {workspace ? (
+            <div className="setting-row">
+              <div className="setting-info">
+                <div className="setting-title">Workspace files</div>
+                <div className="setting-desc selectable">
+                  {workspace.files.map((f) => `${f.name} · ${formatBytes(f.bytes)}`).join('   ') ||
+                    'Nothing written yet'}
+                </div>
+              </div>
+              <button className="btn btn-secondary" onClick={() => void bridge.openDataFolder()}>
+                <FolderOpen size={15} /> Open folder
+              </button>
+            </div>
+          ) : null}
+
+          {workspace?.recovered ? (
+            <div className="setting-note warn" role="status">
+              <AlertCircle size={14} />
+              <span className="grow">
+                A workspace file could not be read, so the previous version was restored. The current
+                files are healthy; the repair is only reported once per launch.
+              </span>
+            </div>
+          ) : null}
+
+          <div className="setting-row">
+            <div className="setting-info">
+              <div className="setting-title">Usage data file</div>
               <div className="setting-desc selectable">{storage?.file ?? '—'}</div>
             </div>
-            <button className="btn btn-secondary" onClick={() => void bridge.openDataFolder()}>
-              <FolderOpen size={15} /> Open folder
-            </button>
+            {storage?.recovered ? (
+              <span className="setting-note warn">
+                <AlertCircle size={14} /> Recovered from a backup
+              </span>
+            ) : null}
           </div>
           <div className="setting-row">
             <div className="setting-info">
-              <div className="setting-title">Delete all data</div>
-              <div className="setting-desc">Permanently remove every recorded day. Cannot be undone.</div>
+              <div className="setting-title">Delete all usage data</div>
+              <div className="setting-desc">
+                Permanently remove every recorded day. Your pages, projects, tasks and clipboard
+                history are kept — export the workspace first if you want a copy of those too.
+              </div>
             </div>
             {confirmDelete ? (
               <div style={{ display: 'flex', gap: 8 }}>

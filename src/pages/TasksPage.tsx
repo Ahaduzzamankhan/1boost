@@ -16,6 +16,8 @@ import {
 import type { Page, Recurrence, Task, TaskStatus } from '../../shared/types'
 import { EmptyState, ErrorState, Segmented } from '../components/ui'
 import { useFocusTarget } from '../nav'
+import { useNavigation } from '../state'
+import { scoreMatch } from '../workspace/search'
 import {
   RECURRENCE_LABEL,
   STATUS_LABEL,
@@ -78,16 +80,42 @@ export default function TasksPage() {
   const [highlight, setHighlight] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [localError, setLocalError] = useState<string | null>(null)
-  const { focus, clearFocus } = useFocusTarget()
+  const { focus, setFocus, clearFocus } = useFocusTarget()
+  const { navigate } = useNavigation()
   const quickRef = useRef<HTMLInputElement | null>(null)
 
   const taskList = useMemo(() => tasks ?? [], [tasks])
   const pageList = useMemo(() => pages ?? [], [pages])
 
+  /** How long the jump highlight stays on the row it landed on. */
+const HIGHLIGHT_MS = 1500
+
+/**
+ * Jump to a task from anywhere — a search hit, a page, the dashboard.
+ *
+ * The filters are cleared first on purpose. Landing on a highlighted row that
+ * the active filter is hiding is indistinguishable from the button doing
+ * nothing, which is exactly the class of bug that made the old palette feel
+ * broken.
+ */
   useEffect(() => {
-    if (focus?.taskId) setHighlight(focus.taskId)
+    if (!focus?.taskId) return
+    setHighlight(focus.taskId)
+    setFilter('all')
+    setQuery('')
+    setTag('')
+    setProjectId('')
+    setExpanded((prev) => ({ ...prev, [focus.taskId as string]: true }))
     clearFocus()
   }, [focus, clearFocus])
+
+  // The flash is an announcement, not a state: leaving it on would make every
+  // later render re-run the animation and keep the row permanently marked.
+  useEffect(() => {
+    if (!highlight) return
+    const timer = setTimeout(() => setHighlight(null), HIGHLIGHT_MS)
+    return () => clearTimeout(timer)
+  }, [highlight])
 
   // "n" starts a task from anywhere in this module; it is the only global-ish
   // shortcut added here, and it stands down while a field has focus.
@@ -137,13 +165,23 @@ export default function TasksPage() {
     return pageList.filter((p) => withTasks.has(p.id) && !p.archived)
   }, [pageList, taskList])
 
+  /** Title lookups, so a task can be found by the project it belongs to. */
+  const titleById = useMemo(() => new Map(pageList.map((p) => [p.id, p.title || 'Untitled'])), [pageList])
+
   const visible = useMemo(() => {
-    const q = query.trim().toLowerCase()
+    const q = query.trim()
     const end = startOfDay(Date.now()) + 86_399_999
     const filtered = taskList.filter((t) => {
       if (projectId && t.projectId !== projectId) return false
       if (tag && !t.tags.includes(tag)) return false
-      if (q && !t.title.toLowerCase().includes(q) && !t.tags.some((x) => x.includes(q))) return false
+      if (q) {
+        // Scored by the same function the palette and the Search page use, so
+        // "find the thing I typed" behaves identically wherever it is typed.
+        const haystack = [t.title, t.tags.join(' '), t.projectId ? titleById.get(t.projectId) ?? '' : '']
+          .join(' ')
+          .trim()
+        if (scoreMatch(haystack, q) < 0) return false
+      }
       switch (filter) {
         case 'open':
           return t.status !== 'done'
@@ -169,7 +207,14 @@ export default function TasksPage() {
       return av === bv ? b.priority - a.priority : av - bv
     })
     return sorted
-  }, [taskList, query, filter, sort, projectId, tag])
+  }, [taskList, query, filter, sort, projectId, tag, titleById])
+
+  /** Open the page a task belongs to, for the cross-links in each row. */
+  const openPage = (id: string) => {
+    if (!id) return
+    navigate('notes')
+    setFocus({ pageId: id })
+  }
 
   const openCount = taskList.filter((t) => t.status !== 'done').length
   const doneCount = taskList.length - openCount
@@ -183,7 +228,7 @@ export default function TasksPage() {
   }
 
   return (
-    <div className="page tasks-page">
+    <div className="page">
       <div className="tasks-head">
         <div>
           <h1 className="page-title">Tasks</h1>
@@ -310,14 +355,12 @@ export default function TasksPage() {
           onToggle={toggleTask}
           onDelete={deleteTask}
           onSave={saveTask}
+          onOpenPage={openPage}
         />
       ) : view === 'board' ? (
         <BoardView tasks={visible} onToggle={toggleTask} onStatus={saveTask} />
       ) : (
-        <CalendarView tasks={visible} onToggle={toggleTask} onOpenDay={(ms) => {
-          setFilter('today')
-          void ms
-        }} />
+        <CalendarView tasks={visible} onToggle={toggleTask} onOpenDay={() => setFilter('today')} />
       )}
     </div>
   )
@@ -335,6 +378,7 @@ function ListView({
   onToggle,
   onDelete,
   onSave,
+  onOpenPage,
 }: {
   tasks: Task[]
   all: Task[]
@@ -346,8 +390,20 @@ function ListView({
   onToggle: (id: string) => Promise<Task | null>
   onDelete: (id: string) => Promise<boolean>
   onSave: (task: Task) => Promise<Task>
+  onOpenPage: (pageId: string) => void
 }) {
   const pageById = useMemo(() => new Map(pages.map((p) => [p.id, p])), [pages])
+  const listRef = useRef<HTMLDivElement | null>(null)
+
+  // Landing on a task means the user can see it. Without this the jump
+  // highlights a row that may be far below the fold, which reads as nothing
+  // having happened at all.
+  useEffect(() => {
+    if (!highlight) return
+    listRef.current
+      ?.querySelector<HTMLElement>(`[data-task-id="${highlight}"]`)
+      ?.scrollIntoView({ block: 'center' })
+  }, [highlight])
 
   if (loading && all.length === 0) {
     return <div className="module-loading">Loading tasks…</div>
@@ -370,7 +426,7 @@ function ListView({
 
   return (
     <div className="card" style={{ marginTop: 16, padding: 0 }}>
-      <div className="row-list">
+      <div className="row-list" ref={listRef}>
         {tasks.map((t) => {
           const due = dueLabel(t.dueMs)
           const open = expanded[t.id]
@@ -379,7 +435,11 @@ function ListView({
           const blockers = t.blockedBy.map((id) => all.find((x) => x.id === id)).filter(Boolean) as Task[]
           const project = pageById.get(t.projectId)
           return (
-            <div key={t.id} className={`task-wrap${highlight === t.id ? ' flash' : ''}`}>
+            <div
+              key={t.id}
+              data-task-id={t.id}
+              className={`task-wrap${highlight === t.id ? ' flash' : ''}`}
+            >
               <div className={`task-row${t.status === 'done' ? ' done' : ''}`}>
                 <button
                   className={`task-check${t.status === 'done' ? ' checked' : ''}`}
@@ -419,10 +479,23 @@ function ListView({
                 ) : null}
 
                 {project ? (
-                  <span className="task-project" title={`Project: ${project.title || 'Untitled'}`}>
+                  <button
+                    className="task-project"
+                    title={`Open project: ${project.title || 'Untitled'}`}
+                    onClick={() => onOpenPage(project.id)}
+                  >
                     {project.icon ? `${project.icon} ` : ''}
                     {project.title || 'Untitled'}
-                  </span>
+                  </button>
+                ) : null}
+                {t.pageId && t.pageId !== t.projectId ? (
+                  <button
+                    className="task-source"
+                    title={`Open page: ${pageById.get(t.pageId)?.title || 'Untitled'}`}
+                    onClick={() => onOpenPage(t.pageId)}
+                  >
+                    <Link2 size={12} />
+                  </button>
                 ) : null}
 
                 <button
@@ -526,6 +599,11 @@ function ListView({
                           </option>
                         ))}
                     </select>
+                    {t.pageId ? (
+                      <button className="btn btn-ghost" onClick={() => onOpenPage(t.pageId)}>
+                        Open page <ChevronRight size={13} />
+                      </button>
+                    ) : null}
                   </div>
 
                   {blockers.length ? (

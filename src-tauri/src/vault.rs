@@ -37,6 +37,40 @@ const MAX_TASKS: usize = 5000;
 /// two can never disagree about what a valid hierarchy looks like.
 pub const MAX_DEPTH: u32 = 8;
 
+/// Bumped when the export file's shape changes; older files stay readable
+/// because every field defaults.
+pub const EXPORT_VERSION: u32 = 1;
+
+/// One workspace export file: everything the user authored, nothing derived.
+///
+/// Version, app version and usage data are deliberately absent — this is a
+/// backup of the work, not of the machine telemetry, which has its own export.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceExport {
+    #[serde(default)]
+    pub version: u32,
+    #[serde(default)]
+    pub exported_at: u64,
+    #[serde(default)]
+    pub pages: Vec<Page>,
+    #[serde(default)]
+    pub tasks: Vec<Task>,
+    #[serde(default)]
+    pub clips: Vec<Clip>,
+}
+
+/// What an import actually did, so Settings can say more than "done".
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportSummary {
+    pub pages: usize,
+    pub tasks: usize,
+    pub clips: usize,
+    /// Items already present that were left alone.
+    pub skipped: usize,
+}
+
 fn now_ms() -> u64 {
     crate::util::now_ms()
 }
@@ -50,16 +84,62 @@ fn new_id(prefix: &str) -> String {
     format!("{prefix}_{:x}{n:04x}", now_ms())
 }
 
-fn read_json<T: for<'de> Deserialize<'de> + Default>(path: &Path) -> T {
+/// Reads a collection, falling back to the previous generation.
+///
+/// A truncated or hand-edited file used to parse as "empty", which meant the
+/// next save overwrote the user's real work with nothing. If the current file
+/// cannot be read, the `.bak` written by the previous save is used instead and
+/// the caller is told, so Settings can say what happened rather than quietly
+/// showing an empty workspace.
+fn read_json<T: for<'de> Deserialize<'de> + Default>(path: &Path) -> (T, bool) {
     match fs::read_to_string(path) {
-        Ok(raw) => serde_json::from_str(&raw).unwrap_or_default(),
-        Err(_) => T::default(),
+        Ok(raw) => match serde_json::from_str(&raw) {
+            Ok(value) => (value, false),
+            Err(e) => {
+                log::warn!("[1boost] {} is not valid JSON ({e}); trying the backup", path.display());
+                read_backup(path)
+            }
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (T::default(), false),
+        Err(e) => {
+            log::warn!("[1boost] {} could not be read ({e}); trying the backup", path.display());
+            read_backup(path)
+        }
     }
 }
 
+/// The previous generation of a collection, or the default when there is none.
+fn read_backup<T: for<'de> Deserialize<'de> + Default>(path: &Path) -> (T, bool) {
+    let bak = backup_path(path);
+    match fs::read_to_string(&bak) {
+        Ok(raw) => match serde_json::from_str(&raw) {
+            Ok(value) => {
+                log::warn!("[1boost] recovered {} from its backup", path.display());
+                (value, true)
+            }
+            Err(_) => (T::default(), false),
+        },
+        Err(_) => (T::default(), false),
+    }
+}
+
+/// `<file>.bak`: the state one save ago.
+fn backup_path(path: &Path) -> PathBuf {
+    let mut name = path.file_name().map(|n| n.to_os_string()).unwrap_or_default();
+    name.push(".bak");
+    path.with_file_name(name)
+}
+
+/// Writes a collection through a temp file + rename, keeping the previous
+/// generation as `.bak`.
+///
+/// The rename of the live file to `.bak` happens before the new one takes its
+/// place, so a crash at any point leaves either the new file or the old one
+/// readable — never neither.
 fn write_json<T: Serialize>(path: &Path, value: &T) {
     let Ok(payload) = serde_json::to_string(value) else { return };
     let tmp = PathBuf::from(format!("{}.tmp", path.display()));
+    let bak = backup_path(path);
     let ok = (|| -> std::io::Result<()> {
         if let Some(dir) = path.parent() {
             fs::create_dir_all(dir)?;
@@ -69,9 +149,18 @@ fn write_json<T: Serialize>(path: &Path, value: &T) {
             f.write_all(payload.as_bytes())?;
             f.sync_all()?;
         }
+        if path.exists() {
+            let _ = fs::remove_file(&bak);
+            fs::rename(path, &bak)?;
+        }
         fs::rename(&tmp, path)
     })();
     if ok.is_err() {
+        // The old file is already safely at `.bak`; put it back so the next
+        // load does not have to fall back at all.
+        if !path.exists() && bak.exists() {
+            let _ = fs::rename(&bak, path);
+        }
         let _ = fs::remove_file(&tmp);
     }
 }
@@ -175,6 +264,16 @@ pub struct Page {
     pub favorite: bool,
     #[serde(default)]
     pub archived: bool,
+    /// A project is an ordinary page that owns tasks.
+    ///
+    /// Deliberately not a second entity: a separate `projects.json` would mean
+    /// two stores for the same idea, two places for a task to point at, and a
+    /// migration for anyone who had one. A project is a page whose `id` appears
+    /// as a task's `project_id`, and this flag is what lets the UI list them
+    /// without scanning every task. `serde(default)` keeps pages written before
+    /// this field loading unchanged.
+    #[serde(default)]
+    pub is_project: bool,
     #[serde(default)]
     pub created_ms: u64,
     #[serde(default)]
@@ -232,6 +331,21 @@ pub struct Task {
 
 pub const TASK_STATUSES: [&str; 4] = ["todo", "doing", "blocked", "done"];
 pub const RECURRENCES: [&str; 5] = ["", "daily", "weekdays", "weekly", "monthly"];
+
+impl Page {
+    /// Clamps everything that came off disk or out of an import: block ids and
+    /// sizes, tags, title length. Applied on load and on import so a
+    /// hand-edited or foreign file cannot produce a page the editor chokes on.
+    fn normalize(&mut self) {
+        if self.title.chars().count() > 200 {
+            self.title = self.title.chars().take(200).collect();
+        }
+        self.tags = normalize_tags(std::mem::take(&mut self.tags));
+        for block in self.blocks.iter_mut() {
+            block.normalize();
+        }
+    }
+}
 
 impl Task {
     /// Reconciles the legacy `done` flag with `status` and clamps everything
@@ -355,32 +469,6 @@ pub fn join_table_rows(rows: &[Vec<String>]) -> String {
         .map(|row| row.join("\t"))
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-/// The block's text as it would read on a page. Used for search previews and
-/// for the markdown export, so both agree with the editor.
-pub fn block_label(block: &Block) -> String {
-    match block.kind.as_str() {
-        "todo" => {
-            if block.checked {
-                format!("[x] {}", block.text)
-            } else {
-                format!("[ ] {}", block.text)
-            }
-        }
-        "divider" => "—".to_string(),
-        "table" => parse_table_rows(&block.extra)
-            .into_iter()
-            .map(|row| row.join(" | "))
-            .collect::<Vec<_>>()
-            .join("\n"),
-        _ => block.text.clone(),
-    }
-}
-
-/// Every page's text flattened into one searchable string.
-pub fn page_text(page: &Page) -> String {
-    page.blocks.iter().map(block_label).collect::<Vec<_>>().join("\n")
 }
 
 fn parse_table_line(line: &str) -> Vec<String> {
@@ -595,6 +683,10 @@ pub struct Vault {
     /// Text currently on the Windows clipboard, so polling only records real
     /// changes (and never re-records what the app itself just pasted).
     last_clip: Mutex<String>,
+    /// Set when a collection had to be read from its backup because the live
+    /// file was missing or unreadable. Surfaced in Settings so the user is
+    /// told their workspace was repaired rather than finding an empty list.
+    recovered: std::sync::atomic::AtomicBool,
 }
 
 impl Vault {
@@ -606,15 +698,127 @@ impl Vault {
             tasks: Mutex::new(Vec::new()),
             clips: Mutex::new(Vec::new()),
             last_clip: Mutex::new(String::new()),
+            recovered: std::sync::atomic::AtomicBool::new(false),
         };
         vault.load();
         vault
     }
 
+    /// True when at least one collection was restored from its backup.
+    pub fn recovered(&self) -> bool {
+        self.recovered.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// A portable copy of the whole workspace: pages, tasks and clipboard.
+    pub fn export(&self) -> WorkspaceExport {
+        WorkspaceExport {
+            version: EXPORT_VERSION,
+            exported_at: now_ms(),
+            pages: self.pages.lock_ok().clone(),
+            tasks: self.tasks.lock_ok().clone(),
+            clips: self.clips.lock_ok().clone(),
+        }
+    }
+
+    /// Folds an export file into the current workspace.
+    ///
+    /// Merging rather than replacing is the whole safety story: importing can
+    /// only ever *add* work, so a wrong file cannot delete a page someone
+    /// wrote since the export was taken. Anything whose id already exists is
+    /// skipped and reported, which makes re-importing the same file a no-op.
+    ///
+    /// References are re-pointed at what actually exists afterwards, so a
+    /// restore onto a fresh machine produces the same connected workspace the
+    /// export came from.
+    pub fn import(&self, payload: WorkspaceExport) -> ImportSummary {
+        let mut summary = ImportSummary::default();
+        {
+            let mut pages = self.pages.lock_ok();
+            let mut seen: BTreeSet<String> = pages.iter().map(|p| p.id.clone()).collect();
+            for page in payload.pages {
+                if page.id.is_empty() || !seen.insert(page.id.clone()) {
+                    summary.skipped += 1;
+                    continue;
+                }
+                let mut page = page;
+                page.normalize();
+                pages.push(page);
+                summary.pages += 1;
+            }
+        }
+        {
+            let page_ids: BTreeSet<String> =
+                self.pages.lock_ok().iter().map(|p| p.id.clone()).collect();
+            let mut tasks = self.tasks.lock_ok();
+            let mut seen: BTreeSet<String> = tasks.iter().map(|t| t.id.clone()).collect();
+            for task in payload.tasks {
+                if task.id.is_empty() || !seen.insert(task.id.clone()) {
+                    summary.skipped += 1;
+                    continue;
+                }
+                let mut task = task;
+                task.normalize();
+                if (!task.page_id.is_empty() && !page_ids.contains(&task.page_id))
+                    || (!task.project_id.is_empty() && !page_ids.contains(&task.project_id))
+                {
+                    // The page this task belonged to is not in the import;
+                    // keeping the id would show a dangling reference forever.
+                    task.page_id.clear();
+                    task.project_id.clear();
+                }
+                tasks.push(task);
+                summary.tasks += 1;
+            }
+        }
+        {
+            let mut clips = self.clips.lock_ok();
+            let mut seen: BTreeSet<String> = clips.iter().map(|c| c.id.clone()).collect();
+            for clip in payload.clips {
+                if clip.id.is_empty() || clip.text.trim().is_empty() || !seen.insert(clip.id.clone()) {
+                    summary.skipped += 1;
+                    continue;
+                }
+                clips.push(clip);
+                summary.clips += 1;
+            }
+        }
+        // Re-normalize the tree: imported pages may nest under each other in an
+        // order that produced a cycle or an over-deep chain.
+        let mut pages = self.pages.lock_ok().clone();
+        normalize_page_parents(&mut pages);
+        *self.pages.lock_ok() = pages;
+        if summary.pages + summary.tasks + summary.clips > 0 {
+            self.save_pages();
+            self.save_tasks();
+            self.save_clips();
+        }
+        summary
+    }
+
+    /// The workspace's own files and their sizes, for the Settings data panel.
+    pub fn files(&self) -> Vec<(String, u64)> {
+        ["pages.json", "tasks.json", "clipboard.json"]
+            .iter()
+            .map(|name| {
+                let path = self.dir.join(name);
+                let bytes = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                (*name, bytes)
+            })
+            .collect()
+    }
+
+    fn note_recovered(&self, was_recovered: bool) {
+        if was_recovered {
+            self.recovered.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
     fn load(&self) {
         let pages_path = self.dir.join("pages.json");
         let mut pages: Vec<Page> = if pages_path.exists() {
-            read_json(&pages_path)
+            let (pages, recovered) = read_json(&pages_path);
+            self.note_recovered(recovered);
+            pages
         } else {
             // First run after the workspace redesign: adopt the old notes.
             let migrated = self.migrate_legacy_notes();
@@ -628,13 +832,12 @@ impl Vault {
             migrated
         };
         for page in pages.iter_mut() {
-            for block in page.blocks.iter_mut() {
-                block.normalize();
-            }
+            page.normalize();
         }
         normalize_page_parents(&mut pages);
 
-        let mut tasks: Vec<Task> = read_json(&self.dir.join("tasks.json"));
+        let (mut tasks, tasks_recovered) = read_json(&self.dir.join("tasks.json"));
+        self.note_recovered(tasks_recovered);
         for task in tasks.iter_mut() {
             task.normalize();
         }
@@ -650,7 +853,9 @@ impl Vault {
             }
         }
 
-        let clip_payload: ClipPayload = read_json(&self.dir.join("clipboard.json"));
+        let (clip_payload, clips_recovered): (ClipPayload, bool) =
+            read_json(&self.dir.join("clipboard.json"));
+        self.note_recovered(clips_recovered);
         *self.pages.lock_ok() = pages;
         *self.tasks.lock_ok() = tasks;
         *self.clips.lock_ok() = clip_payload.clips;
@@ -660,7 +865,7 @@ impl Vault {
     /// left on disk: deleting user data during an upgrade is not something a
     /// migration should do on its own.
     fn migrate_legacy_notes(&self) -> Vec<Page> {
-        let notes: Vec<LegacyNote> = read_json(&self.dir.join("notes.json"));
+        let (notes, _): (Vec<LegacyNote>, bool) = read_json(&self.dir.join("notes.json"));
         notes
             .into_iter()
             .filter(|n| !n.id.is_empty() || !n.title.is_empty() || !n.body.is_empty())
@@ -675,6 +880,7 @@ impl Vault {
                 // an upgrade does not silently drop someone's shortlist.
                 favorite: n.pinned,
                 archived: false,
+                is_project: false,
                 created_ms: n.created_ms,
                 updated_ms: n.updated_ms,
             })
@@ -1122,6 +1328,10 @@ pub struct SearchHit {
     pub score: i64,
     /// Where to jump: a page id for the shell, or `module:kind`.
     pub target: String,
+    /// Secondary line: which project a task belongs to, or an app's share.
+    pub detail: Option<String>,
+    /// Epoch ms when the thing was last touched, for recency ranking.
+    pub updated_ms: u64,
 }
 
 /// Case-insensitive subsequence match with a contiguity bonus — the same
@@ -1158,53 +1368,20 @@ fn fuzzy_score(haystack: &str, needle: &str) -> Option<i64> {
 }
 
 impl Vault {
-    /// Universal search across pages, tasks and the usage history.
+    /// Searches tracked applications by name or key.
+    ///
+    /// Deliberately *only* applications. Pages, projects and tasks are ranked
+    /// in the renderer against the workspace cache it already holds (see
+    /// `src/workspace/search.ts`): doing it here too would mean two scorers to
+    /// keep in agreement and an IPC round trip per keystroke to answer a
+    /// question the renderer can answer on the same frame. Usage history lives
+    /// here and nowhere else, which is the only reason this exists.
     pub fn search(&self, query: &str, apps: &[(String, String, u64)]) -> Vec<SearchHit> {
         let q = query.trim();
         if q.is_empty() {
             return Vec::new();
         }
         let mut hits: Vec<SearchHit> = Vec::new();
-
-        for p in self.pages() {
-            if p.archived {
-                continue;
-            }
-            let text = page_text(&p);
-            let title_score = fuzzy_score(&p.title, q);
-            let body_score = fuzzy_score(&text, q).map(|s| s / 2);
-            let tag_score =
-                p.tags.iter().filter_map(|t| fuzzy_score(t, q)).max().map(|s| s - 10);
-            let best = [title_score, body_score, tag_score].into_iter().flatten().max();
-            if let Some(score) = best {
-                hits.push(SearchHit {
-                    kind: "page".into(),
-                    id: p.id.clone(),
-                    title: if p.title.is_empty() { "Untitled".into() } else { p.title.clone() },
-                    subtitle: preview(&text),
-                    score,
-                    target: p.id.clone(),
-                });
-            }
-        }
-
-        for t in self.tasks() {
-            let mut best = fuzzy_score(&t.title, q);
-            if let Some(s) = t.tags.iter().filter_map(|x| fuzzy_score(x, q)).max() {
-                best = best.max(Some(s - 10));
-            }
-            if let Some(score) = best {
-                hits.push(SearchHit {
-                    kind: "task".into(),
-                    id: t.id.clone(),
-                    title: t.title.clone(),
-                    subtitle: if t.status == "done" { "Completed task".into() } else { "Task".to_string() },
-                    score: score + 5,
-                    target: "tasks".into(),
-                });
-            }
-        }
-
         for (key, name, ms) in apps.iter() {
             if let Some(score) = fuzzy_score(name, q).or_else(|| fuzzy_score(key, q)) {
                 hits.push(SearchHit {
@@ -1212,12 +1389,17 @@ impl Vault {
                     id: key.clone(),
                     title: name.clone(),
                     subtitle: format!("{} tracked", human_duration(*ms)),
-                    score: score - 20,
+                    score,
                     target: "apps".into(),
+                    detail: None,
+                    // Tracked milliseconds, not a timestamp. Left at zero so it
+                    // can never be mistaken for one when sorting.
+                    updated_ms: 0,
                 });
             }
         }
-
+        // Score first, then name: a strong match must not lose to a weak one
+        // that merely happens to sort earlier alphabetically.
         hits.sort_by(|a, b| b.score.cmp(&a.score).then(a.title.cmp(&b.title)));
         hits.truncate(40);
         hits
@@ -1236,15 +1418,6 @@ fn human_duration(ms: u64) -> String {
         format!("{m}m")
     } else {
         "under a minute".into()
-    }
-}
-
-fn preview(body: &str) -> String {
-    let flat: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
-    if flat.chars().count() <= 90 {
-        flat
-    } else {
-        format!("{}…", flat.chars().take(90).collect::<String>())
     }
 }
 
@@ -1560,29 +1733,75 @@ mod tests {
     }
 
     #[test]
+    fn a_corrupt_file_is_recovered_from_the_previous_generation() {
+        let v = temp_vault("recover");
+        v.save_page(Page { title: "Keep me".into(), ..Default::default() });
+        // The next save rotates the first file to pages.json.bak.
+        v.save_page(Page { title: "Also keep me".into(), ..Default::default() });
+        assert!(v.dir.join("pages.json.bak").exists(), "each save keeps the previous one");
+
+        let dir = v.dir.clone();
+        std::fs::write(dir.join("pages.json"), "{ this is not json").unwrap();
+        let reopened = Vault::new(dir);
+        // Not an empty workspace: the last good generation came back.
+        assert!(reopened.pages().iter().any(|p| p.title == "Keep me"));
+        assert!(
+            reopened.recovered(),
+            "a repaired load must be reported, not hidden"
+        );
+    }
+
+    #[test]
+    fn a_missing_file_does_not_claim_recovery() {
+        // First run: there is nothing to recover from, and saying otherwise
+        // would train the user to ignore the warning.
+        let v = temp_vault("fresh");
+        assert!(!v.recovered());
+        assert!(v.files().iter().any(|(name, _)| name == "pages.json"));
+    }
+
+    #[test]
+    fn search_covers_applications_only() {
+        let v = temp_vault("scopes");
+        let apps = vec![
+            ("brave".to_string(), "Brave".to_string(), 1000),
+            ("code".to_string(), "Visual Studio Code".to_string(), 5000),
+        ];
+        let hits = v.search("bra", &apps);
+        assert!(hits.iter().any(|h| h.id == "brave"));
+        assert!(hits.iter().all(|h| h.kind == "app"));
+        // Matched on the key as well as the display name.
+        assert!(v.search("code", &apps).iter().any(|h| h.id == "code"));
+        assert!(v.search("nothing here", &apps).is_empty());
+        assert!(v.search("   ", &apps).is_empty(), "an empty query matches nothing");
+        // Tracked time is not a timestamp and must not be used as one.
+        assert!(hits.iter().all(|h| h.updated_ms == 0));
+    }
+
+    #[test]
     fn search_finds_pages_tasks_and_apps() {
         let v = temp_vault("search");
         v.save_page(Page { title: "Rust release checklist".into(), blocks: body_to_blocks("sign the key"), ..Default::default() });
         v.save_task(Task { title: "Reply to Sam".into(), ..Default::default() });
         let apps = vec![("brave".to_string(), "Brave".to_string(), 3_600_000)];
         // Every kind is reachable — the point of universal search.
-        let hits = v.search("rel", &apps);
+        let hits = v.search("rel", &apps, &[]);
         assert!(hits.iter().any(|h| h.kind == "page"), "pages are searchable");
         assert!(hits.iter().any(|h| h.kind == "task"), "tasks are searchable");
-        let app_hits = v.search("brave", &apps);
+        let app_hits = v.search("brave", &apps, &[]);
         assert!(app_hits.iter().any(|h| h.kind == "app" && h.title == "Brave"));
         // A unique phrase puts its page on top.
-        let exact = v.search("checklist", &apps);
+        let exact = v.search("checklist", &apps, &[]);
         assert_eq!(exact[0].kind, "page");
-        assert!(v.search("zzzz", &apps).is_empty());
-        assert!(v.search("   ", &apps).is_empty());
+        assert!(v.search("zzzz", &apps, &[]).is_empty());
+        assert!(v.search("   ", &apps, &[]).is_empty());
     }
 
     #[test]
     fn archived_pages_stay_out_of_search() {
         let v = temp_vault("archived");
         v.save_page(Page { title: "Old roadmap".into(), archived: true, ..Default::default() });
-        assert!(v.search("roadmap", &[]).is_empty());
+        assert!(v.search("roadmap", &[], &[]).is_empty());
         assert_eq!(v.pages().len(), 1, "but it is still on disk and listed");
     }
 

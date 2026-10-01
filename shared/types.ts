@@ -267,9 +267,28 @@ export interface StorageStatus {
   healthy: boolean
 }
 
+/** One workspace file on disk, as Settings reports it. */
+export interface WorkspaceFile {
+  name: string
+  bytes: number
+}
+
+/**
+ * Health of the pages/tasks/clipboard files.
+ *
+ * Separate from `StorageStatus` because they are separate files with separate
+ * recovery rules: usage data keeps rotated backups, and so does the workspace.
+ */
+export interface WorkspaceStatus {
+  /** A collection was restored from its previous generation after a failed read. */
+  recovered: boolean
+  files: WorkspaceFile[]
+}
+
 export interface SettingsPayload {
   prefs: Prefs
   storage: StorageStatus
+  workspace: WorkspaceStatus
   version: string
   platform: string
   launch: LaunchState
@@ -280,6 +299,15 @@ export interface VideoExportResult {
   ok: boolean
   path?: string
   error?: string
+}
+
+/** What a workspace import added. */
+export interface WorkspaceImport {
+  ok: boolean
+  canceled: boolean
+  error?: string
+  path?: string
+  summary?: { pages: number; tasks: number; clips: number; skipped: number }
 }
 
 /** Auto-update lifecycle as surfaced in Settings. */
@@ -338,6 +366,13 @@ export interface Bridge {
   /** Renderer reports the current theme's window class (glass = transparent). */
   notifyThemeClass: (glass: boolean) => Promise<void>
   exportJson: () => Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }>
+  /** Saves pages, tasks and clipboard history to one portable JSON file. */
+  exportWorkspace: () => Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }>
+  /**
+   * Restores a workspace export. Merges rather than replaces: importing can
+   * only add work, so a wrong file cannot delete anything.
+   */
+  importWorkspace: () => Promise<WorkspaceImport>
   clearData: () => Promise<{ ok: boolean; error?: string }>
   toast: (cb: (msg: string) => void) => () => void
   onPrefsChanged: (cb: (prefs: Prefs) => void) => () => void
@@ -359,6 +394,8 @@ export interface Bridge {
   pageSave: (page: Page) => Promise<Page>
   pageDelete: (id: string) => Promise<boolean>
   tasksList: () => Promise<Task[]>
+  /** Fired after a workspace import so the shared cache refetches. */
+  onWorkspaceChanged: (cb: () => void) => () => void
   taskSave: (task: Task) => Promise<Task>
   taskToggle: (id: string) => Promise<Task | null>
   taskDelete: (id: string) => Promise<boolean>
@@ -369,8 +406,15 @@ export interface Bridge {
   clipsClear: () => Promise<number>
   clipPaste: (id: string) => Promise<boolean>
   clipCapture: () => Promise<Clip | null>
+  /** Subscribe to newly recorded clipboard entries; returns an unsubscribe. */
+  onClipCaptured: (cb: (clip: Clip) => void) => () => void
   tagIndex: () => Promise<Record<string, number>>
-  searchEverything: (query: string) => Promise<SearchHit[]>
+  /**
+   * Searches tracked applications by name or key. Pages, projects and tasks are
+   * ranked in the renderer instead — see `workspace/search` — because the
+   * renderer already holds them, so only the usage history needs a round trip.
+   */
+  searchApps: (query: string) => Promise<SearchHit[]>
   quickCapture: (input: string) => Promise<CaptureResult>
   // File tools ----------------------------------------------------------
   fileRoots: () => Promise<RootFolder[]>
@@ -430,6 +474,11 @@ export interface Page {
   tags: string[]
   favorite: boolean
   archived: boolean
+  /**
+   * A project is an ordinary page that owns tasks — not a separate entity, so
+   * there is no second store to keep in sync and nothing to migrate.
+   */
+  isProject: boolean
   createdMs: number
   updatedMs: number
 }
@@ -484,18 +533,21 @@ export interface RootFolder {
   exists: boolean
 }
 
+export type SearchKind = 'page' | 'project' | 'task' | 'app'
+
+/** A hit from the backend search — tracked applications only. */
 export interface SearchHit {
-  kind: 'page' | 'task' | 'app'
+  kind: SearchKind
   id: string
   title: string
   subtitle: string
   score: number
-  /** A page id for a page hit, or a module id. */
+  /** The module to open for this hit. */
   target: string
 }
 
 export interface CaptureResult {
-  kind: 'page' | 'task'
+  kind: 'page' | 'task' | 'project'
   title: string
   id: string
 }
@@ -511,6 +563,7 @@ export type PageId =
   // productivity modules
   | 'notes'
   | 'tasks'
+  | 'search'
   | 'clipboard'
   | 'calendar'
   | 'utilities'

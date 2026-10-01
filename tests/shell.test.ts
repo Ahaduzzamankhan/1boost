@@ -221,8 +221,8 @@ describe('renderer hook order', () => {
   )
 })
 
-describe('command palette contract', () => {
-  const src = readFileSync(join(SRC, 'components', 'CommandPalette.tsx'), 'utf8')
+describe('command center contract', () => {
+  const src = readFileSync(join(SRC, 'components', 'CommandCenter.tsx'), 'utf8')
 
   it('escapes and closes on Escape', () => {
     expect(src).toContain("e.key === 'Escape'")
@@ -236,6 +236,22 @@ describe('command palette contract', () => {
 
   it('renders through a portal so the overlay escapes the card stack', () => {
     expect(src).toContain('createPortal')
+  })
+
+  it('is the only Ctrl+K surface, and the old palette is gone', () => {
+    // Two boxes answering the same shortcut is the kind of duplication that
+    // made the palette and the page disagree about what a result means.
+    expect(readFileSync(join(SRC, 'components', 'AppShell.tsx'), 'utf8')).toContain(
+      "import CommandCenter from './CommandCenter'",
+    )
+    expect(() => readFileSync(join(SRC, 'components', 'CommandPalette.tsx'), 'utf8')).toThrow()
+  })
+
+  it('is wired around a single shared workspace cache', () => {
+    // Without the provider, every module that calls useWorkspace() throws.
+    const shell = readFileSync(join(SRC, 'components', 'AppShell.tsx'), 'utf8')
+    expect(shell).toContain('<WorkspaceProvider>')
+    expect(shell.indexOf('<WorkspaceProvider>')).toBeLessThan(shell.indexOf('useFocusTarget()'))
   })
 })
 

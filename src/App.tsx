@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { useAppInit, useThemeEffects } from './state'
+import { DashboardSeedProvider, useAppInit, useThemeEffects } from './state'
 import { bridge } from './bridge'
 import AppShell from './components/AppShell'
 import { LoadingScreen } from './components/ui'
@@ -38,12 +38,14 @@ export default function App() {
     )
   }
   return (
-    <AppShell
-      prefs={prefs}
-      toasts={toasts}
-      storage={storage}
-      onDelete={onDelete}
-      version={initial.version}
-    />
+    <DashboardSeedProvider seed={initial.dashboard}>
+      <AppShell
+        prefs={prefs}
+        toasts={toasts}
+        storage={storage}
+        onDelete={onDelete}
+        version={initial.version}
+      />
+    </DashboardSeedProvider>
   )
 }

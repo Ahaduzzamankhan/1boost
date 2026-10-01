@@ -166,6 +166,61 @@ describe('navigation', () => {
   })
 })
 
+describe('global search is one surface, reachable from both entry points', () => {
+  const registry = read('src/modules/registry.tsx')
+  const shell = read('src/components/AppShell.tsx')
+  const palette = read('src/components/CommandCenter.tsx')
+  const page = read('src/pages/SearchPage.tsx')
+
+  it('is a registered module', () => {
+    expect(registry).toMatch(/id: 'search'/)
+    expect(registry).toContain('component: SearchPage')
+    expect(registry).toContain('const SearchPage = lazy(')
+  })
+
+  it('stays out of the sidebar but not out of the command center', () => {
+    // Two search entries in the sidebar would be two answers to one question;
+    // but a surface that is only reachable after typing a query is not
+    // reachable at all when you just want to look at something.
+    expect(registry).toContain('hidden: true')
+    expect(registry).toMatch(/modulesIn[\s\S]*?!m\.hidden/)
+    expect(palette).toMatch(/MODULES\.filter\(\(m\) => !m\.footer\)/)
+  })
+
+  it('opens an application hit on that application, not on the list', () => {
+    // Picking a search result should land on the result everywhere.
+    expect(page).toContain('bridge.openAppDetail(item.id)')
+    expect(palette).toContain('bridge.openAppDetail(id)')
+  })
+
+  it('hands a query from the command center to the Search page', () => {
+    expect(shell).toContain('setFocus({ searchQuery: q })')
+    expect(shell).toContain('navigate(\'search\')')
+    expect(page).toContain('focus?.searchQuery')
+  })
+
+  it('shows the agenda when the Calendar chip is on, even with no query', () => {
+    // A filter that quietly reverts to "recently touched" is worse than no
+    // filter: the user believes they are looking at a narrower list.
+    expect(page).toMatch(
+      /if \(scope === 'calendar'\) \{[\s\S]*?index\.calendar\(q, GROUP_LIMIT\)/,
+    )
+    expect(page).not.toMatch(/Recently touched[\s\S]{0,400}scope === 'calendar'/)
+  })
+
+  it('keeps the dashboard monitoring and application activity', () => {
+    const dash = read('src/pages/DashboardPage.tsx')
+    expect(dash).toContain('<SystemStrip')
+    expect(dash).toContain('bridge.monitor((s) => setMonitor(s))')
+    expect(dash).toContain('Application usage')
+    expect(dash).toContain('bridge.openAppDetail(a.key)')
+    // ...and adds the workspace on top of it rather than instead of it.
+    expect(dash).toMatch(/<Timer size=\{15\} \/>\s*Upcoming/)
+    expect(dash).toMatch(/<FolderGit2 size=\{15\} \/>\s*Projects/)
+    expect(dash).toContain('quick-row')
+  })
+})
+
 describe('auto-update', () => {
   const updater = read('src-tauri/src/updater.rs')
 

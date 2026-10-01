@@ -642,7 +642,10 @@
   background: var(--surface-hover);
 }
 
-.task-row.flash {
+.task-row.flash,
+/* The flash class lands on the wrapper so a task can be announced even when
+   the detail drawer is open; the row inside it is what pulses. */
+.task-wrap.flash .task-row {
   animation: rowFlash 1.2s var(--ease);
 }
 
@@ -2047,16 +2050,6 @@
   color: var(--text-muted);
 }
 
-.task-project {
-  flex-shrink: 0;
-  max-width: 130px;
-  font-size: 11.5px;
-  color: var(--text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .select-box {
   display: flex;
   align-items: center;
@@ -2576,4 +2569,584 @@
   display: flex;
   gap: var(--space-1);
   margin-top: var(--space-1);
+}
+
+/* ------------------------------------------------- command center additions */
+/*
+ * The command center grew two things the old palette never had: scope chips
+ * and group headers. They are styled here next to the palette itself so the
+ * two read as one surface, and the Search page reuses the same classes so a
+ * result looks identical wherever it is found.
+ */
+
+.palette-center {
+  width: min(720px, calc(100vw - 48px));
+  max-height: 68vh;
+}
+
+.palette-scopes {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.palette-scope {
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 11.5px;
+  font-weight: 550;
+  color: var(--text-muted);
+  transition: background var(--transition-fast) var(--ease), color var(--transition-fast) var(--ease);
+}
+
+.palette-scope:hover {
+  background: var(--surface-hover);
+  color: var(--text-secondary);
+}
+
+.palette-scope.active {
+  background: var(--accent-soft);
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+.palette-scope.more {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-color: var(--border);
+  color: var(--text-secondary);
+}
+
+.palette-section + .palette-section {
+  margin-top: var(--space-2);
+}
+
+.palette-section-label {
+  padding: var(--space-2) var(--space-3) 4px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.palette-note {
+  display: block;
+  margin-top: var(--space-2);
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.palette-busy {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* The one thing both surfaces mark: where the query matched. Inverted rather
+   than coloured, because a search highlight is emphasis, not decoration. */
+.search-hit {
+  background: var(--accent-soft);
+  color: var(--text-primary);
+  border-radius: 3px;
+  padding: 0 1px;
+  font-weight: 650;
+}
+
+/* ---------------------------------------------------------- search surface */
+
+.page-search {
+  display: flex;
+  flex-direction: column;
+  /* No fixed height: like every other module this page scrolls with the
+     content area, and the group headers stick to it. Forcing a height here
+     fought the shell's padding and clipped the footer. */
+}
+
+.search-kbd {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.search-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--text-muted);
+  transition: border-color var(--transition-fast) var(--ease);
+}
+
+.search-bar:focus-within {
+  border-color: var(--accent);
+}
+
+.search-bar input {
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-size: 14.5px;
+  font-family: inherit;
+}
+
+.search-bar input::placeholder {
+  color: var(--text-muted);
+}
+
+.page-search .palette-scopes {
+  margin-top: var(--space-3);
+  padding-left: 0;
+  padding-right: 0;
+  background: none;
+  border: none;
+}
+
+.search-results {
+  flex: 1;
+  margin-top: var(--space-3);
+}
+
+.search-section + .search-section {
+  margin-top: var(--space-4);
+}
+
+.search-section-label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: var(--space-2) 0 4px;
+  background: var(--bg);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.search-section-count {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+
+.search-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  text-align: left;
+  color: var(--text-primary);
+}
+
+.search-row.active {
+  background: var(--accent-soft);
+}
+
+.search-row-icon {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.search-row.active .search-row-icon {
+  color: var(--accent);
+}
+
+.search-row-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.search-row-label {
+  display: block;
+  font-size: 13.5px;
+  font-weight: 550;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.search-row-sub {
+  display: block;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.search-row-dot {
+  margin: 0 5px;
+}
+
+.search-row-tail {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.search-row-time {
+  font-size: 11px;
+}
+
+.search-note {
+  margin: var(--space-4) 0 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* Says out loud that the list is capped, so a full-looking group is never
+   mistaken for the whole answer. */
+.search-section-more {
+  margin: var(--space-2) 0 0;
+  padding-left: calc(26px + var(--space-3));
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.search-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding-top: var(--space-3);
+  margin-top: var(--space-3);
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.search-foot-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* --------------------------------------------------- dashboard quick actions */
+
+.quick-row {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
+@media (max-width: 980px) {
+  .quick-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 620px) {
+  .quick-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.quick-action {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--text-primary);
+  min-width: 0;
+  transition: background var(--transition-fast) var(--ease),
+    border-color var(--transition-fast) var(--ease);
+}
+
+.quick-action:hover:not(:disabled) {
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
+}
+
+.quick-action:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.quick-action-icon {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border-radius: 7px;
+  background: var(--surface-hover);
+  color: var(--text-secondary);
+}
+
+.quick-action-label {
+  font-size: 12.5px;
+  font-weight: 550;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.quick-action-hint {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-family: inherit;
+  font-size: 10.5px;
+  color: var(--text-muted);
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+
+/* A task title is a link to the task, so the whole row stays a list. */
+.task-title-button {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-title-button:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.due-tag {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  color: var(--text-muted);
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+
+.due-tag.late {
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+}
+
+.card-count {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-muted);
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.card-count.warn {
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}
+
+.row-tag {
+  margin-left: var(--space-2);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 6px;
+}
+
+.project-row {
+  display: block;
+  width: 100%;
+  padding: var(--space-2) var(--space-4);
+  text-align: left;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+}
+
+.project-row:hover {
+  background: var(--surface-hover);
+}
+
+.project-row-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: 6px;
+}
+
+.project-row-title {
+  font-size: 13px;
+  font-weight: 550;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.project-row-count {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.project-row-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-top: 5px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+/* ------------------------------------------------- cross-links in the pages */
+
+/* A task's project is a link, not a label: the whole point of a project is
+   that you can walk from a row of work back to the plan it belongs to. */
+.task-project {
+  flex-shrink: 0;
+  max-width: 190px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background var(--transition-fast) var(--ease);
+}
+
+.task-project:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.task-source {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  transition: background var(--transition-fast) var(--ease);
+}
+
+.task-source:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+/* A project page in the tree. Same glyph as the command center, so the idea
+   reads the same in both places. */
+.tree-tag {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.tree-row:hover .tree-tag {
+  color: var(--text-secondary);
+}
+
+/* Progress of the project you are editing, right where you edit it. */
+.page-project-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 var(--space-4) var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.page-project-label {
+  font-weight: 550;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.page-project-count {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+.page-project-bar .bar {
+  flex: 1;
+  min-width: 90px;
+  max-width: 240px;
+}
+
+.page-breadcrumb-project {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 var(--space-4) var(--space-2);
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+.page-breadcrumb-project:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.context-more {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.context-more:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.page-context .section-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
 }

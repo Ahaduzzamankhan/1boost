@@ -16,6 +16,9 @@ import { useEffect } from 'react'
  *   anyone asking for a font colour wants.
  * * Custom CSS may not target the layer itself, so a rule cannot delete the
  *   element that holds it and leave the app unstyled.
+ * * Nor may it hide the application: `body { display: none }` would remove the
+ *   only editor that could undo it. Ordinary parts of the UI (a card, the
+ *   sidebar) can still be hidden — only the containers are protected.
  * * Even a pathological stylesheet can only restyle things. It cannot add
  *   behaviour: there is no scripting path from CSS to the app's state, and the
  *   palette/editor keep their own keyboard handling regardless of how the UI
@@ -52,6 +55,23 @@ const UNSAFE = [
  * refuses to be targeted.
  */
 const PROTECTED = new Set([STYLE_ID, 'oneboost-custom-css'])
+
+/**
+ * Selectors that mean "the whole application", and the declarations that
+ * would leave nothing on screen if they were allowed through.
+ *
+ * `body { display: none }` is not a style choice, it is a way to lose the
+ * window: the Settings editor that could undo it lives inside the thing being
+ * hidden. These are only refused on the containers themselves — hiding one
+ * card, or even the whole sidebar, is a legitimate thing to want.
+ */
+const ROOT_SELECTORS = /(^|,)\s*(html|body|:root|#root|\.app)\s*(,|$)/
+
+const BLINDING: { pattern: RegExp; neutral: string }[] = [
+  { pattern: /display\s*:\s*none\s*(?=;|})/gi, neutral: 'display:revert' },
+  { pattern: /visibility\s*:\s*hidden\s*(?=;|})/gi, neutral: 'visibility:visible' },
+  { pattern: /opacity\s*:\s*0(?:\.0+)?\s*(?=;|})/gi, neutral: 'opacity:1' },
+]
 
 /** Applies `css` to the document, or clears the layer when it is empty. */
 export function applyCustomCss(css: string): void {
@@ -92,7 +112,9 @@ export function sanitizeCss(css: string): string {
 }
 
 /**
- * Removes any selector list that mentions the style element's own id.
+ * Removes any selector list that mentions the style element's own id, and
+ * softens declarations that would hide the application itself.
+ *
  * Cheap and conservative: one bad rule in a block drops the whole block, which
  * is acceptable because the alternative is silently allowing it.
  */
@@ -113,10 +135,31 @@ function guardSelectors(css: string): string {
     }
     const body = css.slice(braceAt, end + 1)
     const mentions = [...PROTECTED].some((id) => prelude.includes(id))
-    out.push(mentions ? '/* selector removed */' : prelude + body)
+    if (mentions) {
+      out.push('/* selector removed */')
+    } else {
+      // Only the innermost selector list decides: `body { } .card { }` must
+      // keep the card rule.
+      const subject = prelude.slice(prelude.lastIndexOf('}') + 1).trim()
+      out.push(subject && ROOT_SELECTORS.test(subject) ? soften(prelude, body) : prelude + body)
+    }
     index = end + 1
   }
   return out.join('')
+}
+
+/**
+ * Replaces the declarations that could blank the window, keeping the rest of
+ * the rule. Each one is swapped for its own neutral value rather than being
+ * deleted, so the surrounding rule still parses and the stylesheet stays
+ * valid. Settings already reports that something was changed.
+ */
+function soften(prelude: string, body: string): string {
+  // The closing brace stays in: the patterns end on `;` or `}`, and the last
+  // declaration in a rule usually has no semicolon.
+  let out = body
+  for (const { pattern, neutral } of BLINDING) out = out.replace(pattern, neutral)
+  return prelude + out
 }
 
 /** Index of the `}` closing the `{` at `open`, or -1 when unbalanced. */
@@ -162,6 +205,7 @@ export const CUSTOM_CSS_VARIABLES: { name: string; group: string }[] = [
   { name: '--radius-sm', group: 'Shape' },
   { name: '--radius-md', group: 'Shape' },
   { name: '--radius-lg', group: 'Shape' },
+  { name: '--radius-xl', group: 'Shape' },
   { name: '--space-1', group: 'Spacing' },
   { name: '--space-2', group: 'Spacing' },
   { name: '--space-3', group: 'Spacing' },
@@ -169,6 +213,7 @@ export const CUSTOM_CSS_VARIABLES: { name: string; group: string }[] = [
   { name: '--space-5', group: 'Spacing' },
   { name: '--space-6', group: 'Spacing' },
   { name: '--space-8', group: 'Spacing' },
+  { name: '--space-10', group: 'Spacing' },
   { name: '--text-page-title', group: 'Type' },
   { name: '--text-section', group: 'Type' },
   { name: '--text-value', group: 'Type' },
@@ -186,7 +231,6 @@ export const CUSTOM_CSS_VARIABLES: { name: string; group: string }[] = [
 
 /** Component hooks worth mentioning, so the CSS is usable without source. */
 export const CUSTOM_CSS_SELECTORS: { selector: string; what: string }[] = [
-  { selector: '.app', what: 'the whole application shell' },
   { selector: '.sidebar', what: 'the left navigation rail' },
   { selector: '.nav-item', what: 'one sidebar entry' },
   { selector: '.content', what: 'the main content area' },
@@ -198,6 +242,9 @@ export const CUSTOM_CSS_SELECTORS: { selector: string; what: string }[] = [
   { selector: '.chip', what: 'a small inline chip' },
   { selector: '.segmented', what: 'a segmented control' },
   { selector: '.empty-state', what: 'an empty / placeholder state' },
+  { selector: '.search-row', what: 'one row of search results' },
+  { selector: '.palette', what: 'the command center overlay' },
+  { selector: '.palette-row', what: 'one row of the command center' },
   { selector: '.editor', what: 'the block editor surface' },
   { selector: '.block', what: 'one block in the editor' },
   { selector: '.task-row', what: 'one row in a task list' },

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { CornerDownLeft, FileText, ListChecks, Plus, X } from 'lucide-react'
+import type { CaptureResult } from '../../shared/types'
 import { bridge } from '../bridge'
 
 /**
@@ -19,7 +20,7 @@ export default function QuickCapture({
 }: {
   open: boolean
   onClose: () => void
-  onCaptured: (kind: 'page' | 'task', id: string, title: string) => void
+  onCaptured: (kind: CaptureResult['kind'], id: string, title: string) => void
 }) {
   const [text, setText] = useState('')
   const [error, setError] = useState<string | null>(null)

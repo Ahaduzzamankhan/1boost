@@ -8,15 +8,17 @@ import {
 } from 'react'
 
 /**
- * A one-shot focus target handed to a module: the palette and quick capture
- * ask "open notes, and show me this one" without the shell knowing anything
- * about how a module stores its list.
+ * A one-shot focus target handed to a module: the command center and quick
+ * capture ask "open notes, and show me this one" without the shell knowing
+ * anything about how a module stores its list.
  */
 export interface FocusTarget {
   /** Page id to open in Pages. */
   pageId?: string
   /** Task id to highlight in Tasks. */
   taskId?: string
+  /** Pre-fills the Search module with what was typed in the command center. */
+  searchQuery?: string
   /** Monotonic marker so re-selecting the same row still re-focuses it. */
   nonce: number
 }

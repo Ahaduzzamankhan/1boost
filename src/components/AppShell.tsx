@@ -23,8 +23,9 @@ import {
   modulesIn,
   type WorkspaceId,
 } from '../modules/registry'
-import CommandPalette from './CommandPalette'
+import CommandCenter from './CommandCenter'
 import QuickCapture from './QuickCapture'
+import { WorkspaceProvider } from '../workspace/store'
 
 async function setPrefBridge(key: keyof Prefs, value: string | number | boolean): Promise<void> {
   await bridge.setPref(key, value)
@@ -217,7 +218,8 @@ function ModuleArea({
 }
 
 /** Outer shell: owns the nav context so the sidebar and overlays can hand
- *  focus targets to modules. */
+ *  focus targets to modules, and the workspace context so every module reads
+ *  one shared copy of pages and tasks instead of refetching its own. */
 export default function AppShell(props: {
   prefs: Prefs
   toasts: ToastMsg[]
@@ -227,7 +229,9 @@ export default function AppShell(props: {
 }) {
   return (
     <NavProvider>
-      <Shell {...props} />
+      <WorkspaceProvider>
+        <Shell {...props} />
+      </WorkspaceProvider>
     </NavProvider>
   )
 }
@@ -252,7 +256,7 @@ function Shell({
   const [workspace, setWorkspace] = useState<WorkspaceId>(
     () => (moduleById(page)?.workspace ?? 'insight') as WorkspaceId,
   )
-  const [paletteOpen, setPaletteOpen] = useState(false)
+  const [commandOpen, setCommandOpen] = useState(false)
   const [captureOpen, setCaptureOpen] = useState(false)
 
   useEffect(() => {
@@ -267,14 +271,14 @@ function Shell({
     }
   }, [])
 
-  // Global shortcuts: Ctrl+K palette, Ctrl+Shift+Space capture.
+  // Global shortcuts: Ctrl+K command center, Ctrl+Shift+Space capture.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.ctrlKey || e.metaKey
       if (!mod) return
       if (e.key.toLowerCase() === 'k' && !e.shiftKey) {
         e.preventDefault()
-        setPaletteOpen((o) => !o)
+        setCommandOpen((o) => !o)
       } else if (e.shiftKey && e.code === 'Space') {
         e.preventDefault()
         setCaptureOpen((o) => !o)
@@ -331,7 +335,7 @@ function Shell({
           </nav>
 
           <div className="sidebar-quick">
-            <button className="nav-item" onClick={() => setPaletteOpen(true)}>
+            <button className="nav-item" onClick={() => setCommandOpen(true)}>
               <Search size={18} />
               <span>Search</span>
               <kbd className="nav-kbd">Ctrl K</kbd>
@@ -370,11 +374,21 @@ function Shell({
         </main>
       </div>
 
-      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} onNavigate={go} />
+      <CommandCenter
+        open={commandOpen}
+        onClose={() => setCommandOpen(false)}
+        onNavigate={go}
+        onOpenSearch={(q) => {
+          setCommandOpen(false)
+          navigate('search')
+          setFocus({ searchQuery: q })
+        }}
+      />
       <QuickCapture
         open={captureOpen}
         onClose={() => setCaptureOpen(false)}
         onCaptured={(kind, id) => {
+          // A captured project is a page, so it opens in Pages like any other.
           navigate(kind === 'task' ? 'tasks' : 'notes')
           setFocus(kind === 'task' ? { taskId: id } : { pageId: id })
         }}
@@ -388,10 +402,10 @@ function Shell({
             className="ctx-item"
             role="menuitem"
             onClick={() => {
-              setPaletteOpen(true)
+              setCommandOpen(true)
             }}
           >
-            <Search size={14} /> Command palette
+            <Search size={14} /> Command center
           </button>
           <button
             className="ctx-item"

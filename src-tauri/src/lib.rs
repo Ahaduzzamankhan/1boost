@@ -332,10 +332,30 @@ struct InitialPayload {
 struct SettingsPayload {
     prefs: Prefs,
     storage: StorageStatus,
+    /// The workspace's own files and whether any of them had to be repaired,
+    /// so the data panel can describe pages and tasks as well as usage.
+    workspace: WorkspaceStatus,
     version: String,
     platform: String,
     launch: LaunchState,
     days: Vec<DaySummary>,
+}
+
+/// Health of the pages/tasks/clipboard files, separate from usage storage.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkspaceStatus {
+    /// True when a collection was restored from its `.bak` because the live
+    /// file was missing or unreadable.
+    recovered: bool,
+    files: Vec<WorkspaceFile>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkspaceFile {
+    name: String,
+    bytes: u64,
 }
 
 #[derive(serde::Serialize)]
@@ -388,6 +408,15 @@ fn get_settings_data(app: AppHandle) -> SettingsPayload {
     SettingsPayload {
         prefs: prefs.clone(),
         storage: tracker.storage_status(),
+        workspace: WorkspaceStatus {
+            recovered: st.vault.recovered(),
+            files: st
+                .vault
+                .files()
+                .into_iter()
+                .map(|(name, bytes)| WorkspaceFile { name, bytes })
+                .collect(),
+        },
         version: env!("CARGO_PKG_VERSION").to_string(),
         platform: std::env::consts::OS.to_string(),
         launch: settings::get_launch_at_login_state(&prefs),
@@ -516,6 +545,11 @@ async fn get_apps_list(app: AppHandle) -> Vec<AppUsageItem> {
     app.state::<AppState>().tracker.apps_list_with_icons()
 }
 
+/// Removes recorded usage only.
+///
+/// Pages, tasks and clipboard history are the user's own work and live in
+/// their own files; wiping telemetry must never take them with it. Settings
+/// says so next to the button, and the workspace backup covers the rest.
 #[tauri::command]
 fn clear_data(app: AppHandle) -> Result<bool, String> {
     app.state::<AppState>().tracker.delete_all()?;
@@ -539,8 +573,41 @@ fn open_data_folder(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 async fn export_json(app: AppHandle) -> ExportResult {
     let name = format!("1Boost-usage-export-{}.json", util::day_key(now_ms()));
-    // Async commands run off the main thread, which is what the dialog
-    // plugin's blocking picker requires.
+    // Snapshot under the lock, then let it go: the tracking loop writes
+    // through this same mutex, and it should not wait on a file write.
+    let payload = {
+        let st = app.state::<AppState>();
+        let storage = st.tracker.storage.lock().unwrap_or_else(|e| e.into_inner());
+        serde_json::to_string_pretty(&storage.data)
+    };
+    write_via_picker(
+        &app,
+        &name,
+        payload.map_err(|e| format!("could not serialize your usage data: {e}")),
+    )
+}
+
+/// Where the export picker opens: Documents, which is where someone looking
+/// for an export will look first.
+fn default_export_dir() -> std::path::PathBuf {
+    std::env::var_os("USERPROFILE")
+        .map(std::path::PathBuf::from)
+        .map(|p| p.join("Documents"))
+        .filter(|p| p.is_dir())
+        .unwrap_or_else(storage::user_data_dir)
+}
+
+/// Opens the save picker and writes `payload` there.
+///
+/// Shared by the usage export and the workspace export so both behave the
+/// same way: ask first, write exactly where the user said, create the folder
+/// if it does not exist, and never claim success for a canceled dialog.
+fn write_via_picker(
+    app: &AppHandle,
+    file_name: &str,
+    payload: Result<String, String>,
+) -> ExportResult {
+    let name = file_name.to_string();
     let chosen = app
         .dialog()
         .file()
@@ -565,63 +632,152 @@ async fn export_json(app: AppHandle) -> ExportResult {
             }
         }
     };
-
-    // Snapshot under the lock, then let it go: the tracking loop writes
-    // through this same mutex, and it should not wait on a file write.
-    let payload = {
-        let st = app.state::<AppState>();
-        let storage = st.tracker.storage.lock().unwrap_or_else(|e| e.into_inner());
-        serde_json::to_string_pretty(&storage.data)
-    };
+    let shown = path.display().to_string();
     let payload = match payload {
         Ok(p) => p,
         Err(e) => {
             return ExportResult {
                 ok: false,
-                path: Some(path.display().to_string()),
+                path: Some(shown),
                 canceled: false,
-                error: Some(format!("could not serialize your usage data: {e}")),
+                error: Some(e),
             }
         }
     };
-
     if let Some(dir) = path.parent() {
         if !dir.as_os_str().is_empty() {
             if let Err(e) = std::fs::create_dir_all(dir) {
                 return ExportResult {
                     ok: false,
-                    path: Some(path.display().to_string()),
+                    path: Some(shown),
                     canceled: false,
                     error: Some(format!("could not create {}: {e}", dir.display())),
                 };
             }
         }
     }
-
     match std::fs::write(&path, payload) {
-        Ok(_) => ExportResult {
-            ok: true,
-            path: Some(path.display().to_string()),
-            canceled: false,
-            error: None,
-        },
+        Ok(_) => ExportResult { ok: true, path: Some(shown), canceled: false, error: None },
         Err(e) => ExportResult {
             ok: false,
-            path: Some(path.display().to_string()),
+            path: Some(shown),
             canceled: false,
-            error: Some(format!("could not write {}: {e}", path.display())),
+            error: Some(format!("could not write the file: {e}")),
         },
     }
 }
 
-/// Where the export picker opens: Documents, which is where someone looking
-/// for an export will look first.
-fn default_export_dir() -> std::path::PathBuf {
-    std::env::var_os("USERPROFILE")
-        .map(std::path::PathBuf::from)
-        .map(|p| p.join("Documents"))
-        .filter(|p| p.is_dir())
-        .unwrap_or_else(storage::user_data_dir)
+/// Opens the open picker. `Ok(None)` means the user canceled.
+fn pick_file_to_read(app: &AppHandle) -> Result<Option<std::path::PathBuf>, String> {
+    let chosen = app
+        .dialog()
+        .file()
+        .add_filter("JSON", &["json"])
+        .set_directory(default_export_dir())
+        .blocking_pick_file();
+    match chosen {
+        None => Ok(None),
+        Some(tauri_plugin_dialog::FilePath::Path(p)) => Ok(Some(p)),
+        Some(_) => Err("the picker did not return a file path".into()),
+    }
+}
+
+/// Saves pages, tasks and clipboard history to one portable file.
+///
+/// Usage history has its own export; this is the work the user authored, so a
+/// backup is not a single data point that moves with the app.
+#[tauri::command]
+async fn export_workspace(app: AppHandle) -> ExportResult {
+    let name = format!("1Boost-workspace-{}.json", util::day_key(now_ms()));
+    // Snapshot under the locks, then let them go: the editor writes through
+    // these same mutexes and must not wait on a dialog or a disk write.
+    let payload = {
+        let st = app.state::<AppState>();
+        serde_json::to_string_pretty(&st.vault.export())
+    };
+    write_via_picker(
+        &app,
+        &name,
+        payload.map_err(|e| format!("could not serialize your workspace: {e}")),
+    )
+}
+
+/// The result of a workspace import.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ImportResult {
+    ok: bool,
+    canceled: bool,
+    error: Option<String>,
+    path: Option<String>,
+    summary: Option<vault::ImportSummary>,
+}
+
+/// Restores a workspace export.
+///
+/// Import merges: it can only add work, never remove it, so picking the wrong
+/// file cannot destroy anything. The summary says exactly what happened.
+#[tauri::command]
+async fn import_workspace(app: AppHandle) -> ImportResult {
+    let picked = match pick_file_to_read(&app) {
+        Ok(None) => {
+            return ImportResult { ok: false, canceled: true, error: None, path: None, summary: None }
+        }
+        Ok(Some(p)) => p,
+        Err(e) => {
+            return ImportResult {
+                ok: false,
+                canceled: false,
+                error: Some(e),
+                path: None,
+                summary: None,
+            }
+        }
+    };
+    let raw = match std::fs::read_to_string(&picked) {
+        Ok(r) => r,
+        Err(e) => {
+            return ImportResult {
+                ok: false,
+                canceled: false,
+                error: Some(format!("could not read {}: {e}", picked.display())),
+                path: Some(picked.display().to_string()),
+                summary: None,
+            }
+        }
+    };
+    // A file written by a future build still loads: every field defaults, so
+    // the worst case is an import that adds nothing.
+    let payload: vault::WorkspaceExport = match serde_json::from_str(&raw) {
+        Ok(p) => p,
+        Err(e) => {
+            return ImportResult {
+                ok: false,
+                canceled: false,
+                error: Some(format!("that file is not a 1Boost workspace export: {e}")),
+                path: Some(picked.display().to_string()),
+                summary: None,
+            }
+        }
+    };
+    let summary = app.state::<AppState>().vault.import(payload);
+    // The renderer's cache is now out of date; say so rather than making the
+    // user reload the window to see what they just restored.
+    let _ = app.emit("oneboost://workspace-changed", ());
+    log::info!(
+        "[1boost] workspace import added {} page(s), {} task(s), {} clip(s), skipped {}",
+        summary.pages,
+        summary.tasks,
+        summary.clips,
+        summary.skipped
+    );
+    ImportResult {
+        ok: true,
+        canceled: false,
+        error: None,
+        path: Some(picked.display().to_string()),
+        summary: Some(summary),
+    }
 }
 
 // Window controls -------------------------------------------------------------
@@ -801,9 +957,14 @@ fn tag_index(app: AppHandle) -> std::collections::BTreeMap<String, usize> {
     vault::tag_index(&v.pages(), &v.tasks())
 }
 
-/// Universal search across pages, tasks and tracked apps.
+/// Searches tracked applications by name or key.
+///
+/// The other kinds are searched in the renderer against the workspace cache it
+/// already holds, so results appear on the same frame as the keystroke; the
+/// usage history behind applications lives here, which is why only those need
+/// a round trip.
 #[tauri::command]
-fn search_everything(app: AppHandle, query: String) -> Vec<vault::SearchHit> {
+fn search_apps(app: AppHandle, query: String) -> Vec<vault::SearchHit> {
     let st = app.state::<AppState>();
     let apps: Vec<(String, String, u64)> = st
         .tracker
@@ -829,6 +990,9 @@ fn quick_capture(app: AppHandle, input: String) -> Result<CaptureResult, String>
     if text.is_empty() {
         return Err("nothing to capture".into());
     }
+    // `!` forces a task and `>` forces a page. There is deliberately no `#`
+    // marker: `#` is already the tag syntax this box documents, and quietly
+    // reinterpreting a leading `#word` would break every existing habit.
     let (forced, rest) = match text.chars().next() {
         Some('!') => (Some("task"), text[1..].trim()),
         Some('>') => (Some("page"), text[1..].trim()),
@@ -858,7 +1022,12 @@ fn quick_capture(app: AppHandle, input: String) -> Result<CaptureResult, String>
         let t = v.save_task(vault::Task { title: content, tags, ..Default::default() });
         CaptureResult { kind: "task".into(), title: t.title, id: t.id }
     } else {
-        let p = v.save_page(vault::Page { title, blocks: Vec::new(), tags, ..Default::default() });
+        let p = v.save_page(vault::Page {
+            title,
+            blocks: vec![vault::Block::new("paragraph", "")],
+            tags,
+            ..Default::default()
+        });
         CaptureResult { kind: "page".into(), title: p.title, id: p.id }
     };
     Ok(result)
@@ -867,7 +1036,17 @@ fn quick_capture(app: AppHandle, input: String) -> Result<CaptureResult, String>
 /// Background clipboard watcher: records new clipboard text into the history.
 /// Polling keeps this dependency-free and robust — a listener would need a
 /// message pump on a hidden window for no practical gain at this scale.
-fn clipboard_watch_loop(v: Arc<vault::Vault>, stop: Arc<std::sync::atomic::AtomicBool>) {
+///
+/// New entries are pushed to the window as they are stored. The Clipboard
+/// module used to re-fetch the whole history on a timer instead, which cost
+/// an IPC round trip and a full list re-render every three seconds for as long
+/// as the page happened to be open; now it only does work when something
+/// actually arrived.
+fn clipboard_watch_loop(
+    app: AppHandle,
+    v: Arc<vault::Vault>,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+) {
     const POLL_MS: u64 = 900;
     v.seed_clipboard();
     while !stop.load(Ordering::Relaxed) {
@@ -876,7 +1055,13 @@ fn clipboard_watch_loop(v: Arc<vault::Vault>, stop: Arc<std::sync::atomic::Atomi
             return;
         }
         if let Some(text) = clipboard::get_text() {
-            v.record_clip(text);
+            if let Some(clip) = v.record_clip(text) {
+                // `get_webview_window` is cheap and may legitimately be None
+                // during teardown; a missing window simply has no listener.
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.emit("oneboost://clip-captured", &clip);
+                }
+            }
         }
     }
 }
@@ -1037,6 +1222,8 @@ pub fn run() {
             files_search,
             open_file,
             export_json,
+            export_workspace,
+            import_workspace,
             monitor_subscribe,
             monitor_unsubscribe,
             navigate,
@@ -1044,6 +1231,7 @@ pub fn run() {
             pages_list,
             page_save,
             page_delete,
+            
             tasks_list,
             task_save,
             task_toggle,
@@ -1056,7 +1244,7 @@ pub fn run() {
             clip_paste,
             clip_capture,
             tag_index,
-            search_everything,
+            search_apps,
             quick_capture,
             minimize_window,
             toggle_maximize,
@@ -1121,8 +1309,9 @@ pub fn run() {
             // Clipboard history watcher.
             {
                 let v = vault.clone();
+                let clip_handle = handle.clone();
                 std::thread::spawn(move || {
-                    clipboard_watch_loop(v, Arc::new(std::sync::atomic::AtomicBool::new(false)))
+                    clipboard_watch_loop(clip_handle, v, Arc::new(std::sync::atomic::AtomicBool::new(false)))
                 });
             }
             let loop_handle = handle.clone();

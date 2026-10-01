@@ -6,7 +6,71 @@ section is injected into the GitHub Release body by CI
 
 ## [Unreleased]
 
+### Added
+
+- **Global search.** One field that finds pages, projects, tasks, calendar
+  items and tracked applications. Results are grouped by kind, highlighted
+  where the query matched, narrowed by filter chips (All / Projects / Pages /
+  Tasks / Calendar / Apps) and opened directly with Enter. Pages, projects and
+  tasks are ranked in the renderer against the cache the app already holds, so
+  results appear on the same frame as the keystroke; only the usage history
+  behind applications needs a round trip, and that is debounced.
+  Empty query shows what you touched most recently and what is coming up.
+- **The command center.** Ctrl+K is now a global command center rather than a
+  search box: create a page, a project or a task from what you typed, jump to
+  any module, reopen recent pages and projects, quick capture, today's tasks,
+  pause tracking and open settings — all without the mouse. `Tab` cycles the
+  filter, `↑`/`↓` move, `Enter` opens, `Esc` closes, and a leading `>` jumps to
+  Tasks. "All results" hands the query to the full search surface.
+- **Quick actions on the dashboard.** Search, new page, new project, tasks and
+  the live system view are one click away from the top of the home screen.
+- **Workspace backup and restore.** Settings can export pages, projects, tasks
+  and clipboard history to one portable JSON file and import it back. Import
+  *merges*: it can only add work, never remove it, and reports exactly what it
+  added, so picking the wrong file cannot destroy anything. "Delete all usage
+  data" now says — and is — about telemetry only.
+- **Workspace recovery.** Every workspace file keeps its previous generation as
+  `.bak`. A file that cannot be read is restored from it and the repair is
+  reported in Settings instead of showing an empty workspace.
+
 ### Changed
+
+- **The dashboard is the central overview.** Today's tasks and a seven-day
+  upcoming list, recent pages and active projects with progress, quick actions,
+  the time/activity summary, application activity, live system monitoring and
+  the shortcut list — the monitoring and activity sections are unchanged, the
+  workspace is layered on top. Navigation is instant and in-app, and every
+  project, page and task on the screen is a link to the thing itself.
+- **Projects are visible everywhere.** A page can be marked as a project from
+  its own toolbar; the tree marks them, the dashboard lists them with progress,
+  the editor shows a project's task count, a sub-page says which project it
+  belongs to, and a task's project is a link rather than a label.
+- **The clipboard no longer polls.** New entries are pushed to the window as
+  they are stored, replacing a three-second timer that refetched the whole
+  history for as long as the page was open.
+- **The dashboard paints on the first frame.** The payload `get_initial`
+  already paid for is handed to the module through context instead of being
+  fetched again, so the home screen no longer waits for the next usage push.
+- **Search lives in one place.** Pages, the sidebar filter and Tasks all score
+  with the same function the command center and the Search page use, so the
+  same word always finds the same things.
+
+### Fixed
+
+- `.grow`, the flex spacer used by every banner, row and strip in the app, had
+  no CSS rule at all, so those layouts collapsed.
+- `--text-secondary` was declared twice in `:root`, silently overwriting the
+  typography value with a colour. The sizes are now `--text-secondary-size`
+  and `--text-muted-size`, and both are documented because they exist.
+- A custom stylesheet could blank the window (`body { display: none }`) with no
+  way back to the editor that would undo it. Containers are protected now;
+  hiding any ordinary part of the UI still works.
+- The Settings custom-CSS editor documented two variables that did not exist.
+- Searching for an application landed on the application list instead of that
+  application.
+- `Delete all data` did not say that it leaves pages and tasks alone.
+
+### Changed (the workspace redesign)
 
 - **1Boost is now a connected workspace.** Notes and Tasks were two unrelated
   modules that happened to share a data folder; they are now one model.

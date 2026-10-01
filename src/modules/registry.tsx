@@ -13,6 +13,7 @@ import {
   NotebookPen,
   Settings as SettingsIcon,
   ListChecks,
+  Search,
   Wrench,
 } from 'lucide-react'
 import type { PageId } from '../../shared/types'
@@ -38,6 +39,7 @@ export type SettingsPageProps = {
 }
 const NotesPage = lazy(() => import('../pages/NotesPage'))
 const TasksPage = lazy(() => import('../pages/TasksPage'))
+const SearchPage = lazy(() => import('../pages/SearchPage'))
 const ClipboardPage = lazy(() => import('../pages/ClipboardPage'))
 const CalendarPage = lazy(() => import('../pages/CalendarPage'))
 const UtilitiesPage = lazy(() => import('../pages/UtilitiesPage'))
@@ -58,12 +60,19 @@ export interface ModuleDef {
   label: string
   /** Extra search terms for the command palette. */
   keywords: string[]
-  /** Absent for footer entries, which live outside every workspace. */
+  /** Absent for entries that live outside every workspace. */
   workspace?: WorkspaceId
   icon: ReactNode
   component: LazyExoticComponent<ComponentType<any>>
   /** Settings lives in the sidebar footer, not in a workspace list. */
   footer?: boolean
+  /**
+   * Reachable and searchable, but never listed in the sidebar. Search is the
+   * one such surface: the sidebar already has a Search button that opens the
+   * command center, and listing the page too would be a second way to do the
+   * same thing with a different result.
+   */
+  hidden?: boolean
 }
 
 export const WORKSPACES: Workspace[] = [
@@ -135,6 +144,16 @@ export const MODULES: ModuleDef[] = [
     component: TasksPage,
   },
   {
+    id: 'search',
+    label: 'Search',
+    keywords: ['search', 'find', 'filter', 'everything', 'jump', 'quick'],
+    icon: <Search size={18} />,
+    component: SearchPage,
+    // Reached from the command center's "All results" and from the sidebar's
+    // Search button; not listed, so the sidebar never grows a second search.
+    hidden: true,
+  },
+  {
     id: 'clipboard',
     label: 'Clipboard',
     keywords: ['clipboard', 'copy', 'paste', 'snippets', 'history'],
@@ -193,9 +212,9 @@ export function moduleById(id: PageId): ModuleDef | undefined {
   return BY_ID.get(id)
 }
 
-/** Modules shown in a workspace; the footer item is excluded. */
+/** Modules shown in a workspace; footer and hidden entries are excluded. */
 export function modulesIn(workspace: WorkspaceId): ModuleDef[] {
-  return MODULES.filter((m) => m.workspace === workspace && !m.footer)
+  return MODULES.filter((m) => m.workspace === workspace && !m.footer && !m.hidden)
 }
 
 export function moduleLabel(id: PageId): string {

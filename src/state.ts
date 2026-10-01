@@ -1,4 +1,16 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  createContext,
+  // `createElement` rather than JSX: this module is a `.ts` file and stays
+  // free of markup.
+  createElement,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
 import type { DashboardData, LiveSnapshot, PageId, Prefs, ToastMsg } from '../shared/types'
 import { bridge } from './bridge'
 import { useCustomCss } from './customCss'
@@ -97,12 +109,41 @@ function withAlphaCss(color: string, alpha: number): string {
   return color
 }
 
-export function useDashboard(initialDashboard: DashboardData | null) {
-  const [dashboard, setDashboard] = useState<DashboardData | null>(initialDashboard)
-  const [snapshot, setSnapshot] = useState<LiveSnapshot | null>(initialDashboard?.snapshot ?? null)
+/**
+ * The dashboard payload `getInitial` already paid for.
+ *
+ * It used to be fetched at startup and then thrown away, because the Dashboard
+ * module was mounted long after and had no way to see it — so the home screen
+ * rendered nothing until the next usage push arrived. Handing it down through
+ * context costs nothing, paints the dashboard on the first frame, and removes
+ * a redundant fetch.
+ */
+const DashboardSeedContext = createContext<DashboardData | null>(null)
+
+export function DashboardSeedProvider({
+  seed,
+  children,
+}: {
+  seed: DashboardData | null
+  children: ReactNode
+}) {
+  return createElement(DashboardSeedContext.Provider, { value: seed }, children)
+}
+
+/**
+ * Live dashboard state.
+ *
+ * Seeds from the startup payload, then follows pushes. Falls back to one
+ * explicit fetch when there is no seed, so the screen can never be left blank
+ * waiting for a tick.
+ */
+export function useDashboard(): { dashboard: DashboardData | null; snapshot: LiveSnapshot | null } {
+  const seed = useContext(DashboardSeedContext)
+  const [pushed, setPushed] = useState<DashboardData | null>(null)
+  const [snapshot, setSnapshot] = useState<LiveSnapshot | null>(null)
 
   useEffect(() => {
-    const offU = bridge.onUsageUpdated((d) => setDashboard(d))
+    const offU = bridge.onUsageUpdated((d) => setPushed(d))
     const offS = bridge.snapshot((s) => setSnapshot(s))
     return () => {
       offU()
@@ -110,14 +151,27 @@ export function useDashboard(initialDashboard: DashboardData | null) {
     }
   }, [])
 
+  // With no seed there is nothing on screen yet, so ask once rather than
+  // waiting for the next push — which can be a minute away.
   useEffect(() => {
-    if (initialDashboard) {
-      setDashboard(initialDashboard)
-      setSnapshot(initialDashboard.snapshot)
+    if (seed) return
+    let cancelled = false
+    bridge
+      .getDashboard()
+      .then((d) => {
+        if (!cancelled) setPushed(d)
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
     }
-  }, [initialDashboard])
+  }, [seed])
 
-  return { dashboard, snapshot }
+  // A seed change (startup finishing, or a reset) wins over older pushes.
+  const dashboard = seed ?? pushed
+  const live = snapshot ?? seed?.snapshot ?? pushed?.snapshot ?? null
+
+  return useMemo(() => ({ dashboard, snapshot: live }), [dashboard, live])
 }
 
 export function useNavigation(initialPage: PageId = 'dashboard') {

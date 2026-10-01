@@ -19,18 +19,21 @@ function body(source: string, from: string, to: string): string {
 }
 
 describe('export JSON', () => {
+  // The dialog + write path is shared by the usage export and the workspace
+  // export, so it is pinned once here rather than twice.
+  const picker = body(lib, 'fn write_via_picker', '/// Opens the open picker.')
   const exportFn = body(lib, 'async fn export_json', '/// Where the export picker opens')
 
   it('asks where to save instead of silently writing into the app folder', () => {
-    expect(exportFn).toContain('.blocking_save_file()')
-    expect(exportFn).toContain('.add_filter("JSON", &["json"])')
-    expect(exportFn).toContain('.set_file_name(&name)')
+    expect(picker).toContain('.blocking_save_file()')
+    expect(picker).toContain('.add_filter("JSON", &["json"])')
+    expect(picker).toContain('.set_file_name(&name)')
     // Nothing may be written before the user has chosen a destination.
-    expect(exportFn.indexOf('blocking_save_file')).toBeLessThan(exportFn.indexOf('std::fs::write'))
+    expect(picker.indexOf('blocking_save_file')).toBeLessThan(picker.indexOf('std::fs::write'))
   })
 
   it('reports a canceled picker instead of claiming success', () => {
-    expect(exportFn).toMatch(/let Some\(target\) = chosen else \{[\s\S]*?canceled: true/)
+    expect(picker).toMatch(/let Some\(target\) = chosen else \{[\s\S]*?canceled: true/)
   })
 
   it('does not hold the storage lock across the file write', () => {
@@ -38,19 +41,22 @@ describe('export JSON', () => {
     // write (or on a dialog) stalls tracking.
     const serializeAt = exportFn.indexOf('serde_json::to_string_pretty')
     const lockAt = exportFn.indexOf('.lock()')
-    const writeAt = exportFn.indexOf('std::fs::write')
     expect(lockAt).toBeLessThan(serializeAt)
-    // The guard is dropped at the end of the block that serializes.
-    expect(exportFn.slice(serializeAt, writeAt)).toContain('};')
+    // The guard is dropped at the end of the block that serializes, before
+    // the (blocking) picker is ever opened.
+    expect(exportFn.slice(serializeAt)).toContain('};')
+    expect(exportFn.indexOf('write_via_picker')).toBeGreaterThan(lockAt)
   })
 
   it('runs off the main thread, which the blocking dialog requires', () => {
     expect(lib).toMatch(/#\[tauri::command\]\s*\nasync fn export_json/)
+    expect(lib).toMatch(/#\[tauri::command\]\s*\nasync fn export_workspace/)
+    expect(lib).toMatch(/#\[tauri::command\]\s*\nasync fn import_workspace/)
   })
 
   it('creates the chosen directory and explains any failure', () => {
-    expect(exportFn).toContain('std::fs::create_dir_all(dir)')
-    expect(exportFn).toContain('could not write')
+    expect(picker).toContain('std::fs::create_dir_all(dir)')
+    expect(picker).toContain('could not write')
   })
 
   it('opens the picker in Documents rather than %APPDATA%', () => {
@@ -66,6 +72,43 @@ describe('export JSON', () => {
     expect(page).toContain('Exported to')
     // A button with no label change and no output is what we just fixed.
     expect(page).toMatch(/exporting \? 'Exporting…' : 'Export JSON'/)
+  })
+})
+
+describe('workspace backup and restore', () => {
+  it('imports by merging, so a wrong file can never delete work', () => {
+    const vault = read('src-tauri/src/vault.rs')
+    const imp = body(vault, 'pub fn import(', 'pub fn files(')
+    // Additive only: nothing is removed or overwritten.
+    expect(imp).not.toMatch(/\.retain\(/)
+    expect(imp).not.toContain('= payload.pages')
+    expect(imp).toContain('summary.skipped += 1')
+    expect(imp).toContain('task.project_id.clear()')
+  })
+
+  it('keeps the previous generation of every collection as a backup', () => {
+    const vault = read('src-tauri/src/vault.rs')
+    const write = body(vault, 'fn write_json<T: Serialize>', '// ------')
+    expect(write).toContain('fs::rename(path, &bak)')
+    expect(vault).toContain('fn backup_path')
+    // A file that cannot be parsed falls back rather than silently becoming
+    // empty and then being overwritten by the next save.
+    expect(vault).toMatch(/fn read_json[\s\S]*?read_backup\(path\)/)
+  })
+
+  it('tells the renderer its cache is stale after an import', () => {
+    expect(lib).toContain('oneboost://workspace-changed')
+    expect(lib).toContain('export_workspace,')
+    expect(lib).toContain('import_workspace,')
+  })
+
+  it('never deletes the workspace when usage data is cleared', () => {
+    // "Delete all data" is about telemetry. The user's own pages live in
+    // their own files and must survive it.
+    const clear = body(lib, 'fn clear_data', 'fn open_data_folder')
+    expect(clear).not.toContain('vault')
+    const page = read('src/pages/SettingsPage.tsx')
+    expect(page).toMatch(/pages, projects, tasks and clipboard\s*history are kept/)
   })
 })
 

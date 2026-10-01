@@ -1,4 +1,4 @@
-import type { Block, Page, Recurrence, Task, TaskStatus } from '../../shared/types'
+import type { Page, Recurrence, Task, TaskStatus } from '../../shared/types'
 
 /**
  * Derived helpers over the workspace data.
@@ -61,11 +61,6 @@ export function recentPages(pages: Page[], limit: number): Page[] {
     .slice(0, limit)
 }
 
-/** Blocks of a kind that point at `id` — used to highlight a reference. */
-export function referencingBlocks(page: Page, id: string): Block[] {
-  return page.blocks.filter((b) => b.meta === id && (b.kind === 'page' || b.kind === 'task'))
-}
-
 /** A page's text, for search fallbacks and the search index label. */
 export function pageText(page: Page): string {
   return page.blocks
@@ -117,7 +112,27 @@ export function todaysTasks(tasks: Task[]): Task[] {
   const end = startOfDay(Date.now()) + 86_399_999
   return tasks
     .filter((t) => t.status !== 'done' && t.dueMs != null && t.dueMs <= end)
-    .sort((a, b) => (a.dueMs ?? 0) - (b.dueMs ?? 0) || b.priority - a.priority)
+    .sort(byUrgency)
+}
+
+/**
+ * Open tasks due after today and within `days`.
+ *
+ * The counterpart to `todaysTasks`: today is "what you owe now", this is
+ * "what is coming", so the two never overlap and together they are the whole
+ * planning horizon.
+ */
+export function upcomingTasks(tasks: Task[], days = 7): Task[] {
+  const from = startOfDay(Date.now()) + 86_400_000
+  const to = from + days * 86_400_000
+  return tasks
+    .filter((t) => t.status !== 'done' && t.dueMs != null && t.dueMs >= from && t.dueMs < to)
+    .sort(byUrgency)
+}
+
+/** Soonest first; within a day, the more important task leads. */
+function byUrgency(a: Task, b: Task): number {
+  return (a.dueMs ?? 0) - (b.dueMs ?? 0) || b.priority - a.priority || a.order - b.order
 }
 
 /** Local YYYY-MM-DD, matching the backend's day keys. */

@@ -31,7 +31,11 @@
   --text-section: 18px;
   --text-value: 30px;
   --text-body: 14px;
-  --text-secondary: 12.5px;
+  /* Named `-size` on purpose: `--text-secondary` is a *colour* further down,
+     and having both meant the size was silently overridden before anything
+     could read it. */
+  --text-secondary-size: 12.5px;
+  --text-muted-size: 11.5px;
 
   /* Accent. Deliberately achromatic: 1Boost's palette is black, white and
      grayscale, so these describe emphasis (a selected row, a focus ring, a
@@ -385,6 +389,15 @@ button:focus-visible,
      reads as a smoother entrance at opacity-only durations. */
   animation: pageIn 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
   padding-bottom: var(--space-10);
+}
+
+/* Fills whatever is left in a flex row. Used by every banner, row and strip
+   in the app to push trailing controls to the far side; without it those
+   layouts collapse and the trailing control sits mid-row. `min-width: 0` is
+   what lets a long middle label ellipsize instead of stretching the row. */
+.grow {
+  flex: 1;
+  min-width: 0;
 }
 
 @keyframes pageIn {

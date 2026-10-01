@@ -62,17 +62,39 @@ It records usage **locally**, turns raw activity into useful daily statistics, a
 ## 🚀 Features
 
 ### 🏠 Dashboard
-The home of 1Boost: today's tasks and recent pages first, then the time and
-activity picture.
+The central overview: what you owe today, what is coming, what you have been
+working on, and whether the machine is healthy.
 
-- Today's tasks, completable in place
-- Recent pages and notes
+- Quick actions: search, new page, new project, tasks, live system view
+- Today's tasks, completable in place, with an overdue count
+- Upcoming tasks for the next seven days
+- Recent pages, and active projects with their progress
 - PC-on, active and idle time
-- Today's top applications
+- Today's top applications, each opening its own detail view
 - 7/30-day and all-time usage trends
 - Fullscreen focus tracking and battery estimate
 - Live system strip (CPU, memory, tightest drive)
 - Keyboard shortcut reference
+
+### 🔎 Search
+One field for everything, from `Ctrl+K` or the Search module.
+
+- Pages, projects, tasks, calendar items and tracked applications
+- Grouped by kind, with the matched text highlighted
+- Filter chips for All / Projects / Pages / Tasks / Calendar / Apps
+- Full keyboard control: `/` to focus, `↑` `↓` to move, `Enter` to open,
+  `Tab` to change filter, `Esc` to clear
+- An empty query shows what you touched most recently and what is coming up
+- Pages, projects and tasks are ranked locally against the cache the app
+  already holds, so results appear on the same frame as the keystroke
+
+### ⌨️ Command center
+`Ctrl+K` — the fastest path to anything in 1Boost, without the mouse.
+
+- Create a page, a project, or a task from what you typed
+- Jump to any module, reopen recent pages and projects
+- Quick capture, today's tasks, pause tracking, settings
+- `Tab` cycles the filter, `>` jumps to Tasks
 
 ### 📝 Pages
 A block editor rather than a textarea, over a tree of pages.
@@ -85,6 +107,8 @@ A block editor rather than a textarea, over a tree of pages.
 - Undo/redo, and autosave with `Ctrl+S` to flush
 - Favourites, recents, search and backlinks
 - Task blocks and page blocks that reference the rest of the workspace
+- Any page can be flagged as a **project** — a page that owns tasks and its
+  sub-pages — with its progress shown in the editor, the tree and the dashboard
 
 ### ✅ Tasks
 - Status (to do, in progress, blocked, done), priority and due dates
@@ -93,6 +117,7 @@ A block editor rather than a textarea, over a tree of pages.
 - List, board and calendar views
 - Filter by status, project and tag; sort four ways
 - Quick create with `Enter`; press `N` to jump to it from anywhere
+- Each row links to its project and its source page
 
 ### 🧩 Application analytics
 - All-time per-app usage
@@ -112,7 +137,17 @@ Black, white and grayscale by default.
 - **Optional custom CSS** — every supported variable and component class is
   listed in Settings. Your stylesheet is applied after the app's own, inside a
   single isolated element, and clearing it restores the default completely.
-  Remote loads and anything executable are stripped.
+  Remote loads and anything executable are stripped, and a rule that would
+  hide the whole application is refused (hiding any ordinary part of the UI is
+  still fine).
+
+### 💾 Your data
+- Everything stays on the machine, in plain JSON.
+- Pages, tasks and clipboard history are written atomically and keep their
+  previous version as a `.bak`, so a file that cannot be read is recovered
+  rather than silently emptied.
+- Export usage data, or export and re-import the whole workspace. Import
+  merges, so it can only add work and never overwrite anything.
 
 ### 🔄 Modern updater
 Signed Tauri updates, GitHub Releases integration, background downloads and differential NSIS packages.
