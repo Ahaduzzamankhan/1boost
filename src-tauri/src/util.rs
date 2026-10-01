@@ -205,24 +205,28 @@ mod tests {
 
     #[test]
     fn day_keys_are_distinct_across_a_month_boundary() {
-        // The dashboard slices the trend by day key, so a day that merged into
-        // its neighbour would silently drop a whole day of usage.
-        assert_ne!(shift_day_key("2026-01-31", 1).unwrap(), "2026-02-01");
+        // Month, year and leap-day boundaries are where civil-date arithmetic
+        // goes wrong, and a wrong day key silently drops a day of usage.
+        assert_eq!(shift_day_key("2026-01-31", 1).unwrap(), "2026-02-01");
+        assert_eq!(shift_day_key("2026-02-01", -1).unwrap(), "2026-01-31");
         assert_eq!(shift_day_key("2026-12-31", 1).unwrap(), "2027-01-01");
-        // Leap day.
+        // A leap year inserts the extra day...
         assert_eq!(shift_day_key("2028-02-28", 1).unwrap(), "2028-02-29");
         assert_eq!(shift_day_key("2028-03-01", -1).unwrap(), "2028-02-29");
+        // ...and a common year must not, or every day drifts by one.
+        assert_eq!(shift_day_key("2026-02-28", 1).unwrap(), "2026-03-01");
     }
 
     #[test]
     fn a_full_year_of_shifts_is_invertible() {
         // Guards the arithmetic the retention trim and the trend window both
         // depend on: shifting forward then back must land on the same key.
+        // 2026 is not a leap year, so 365 steps forward is the next Jan 1.
         let mut key = "2026-01-01".to_string();
         for _ in 0..365 {
             key = shift_day_key(&key, 1).unwrap();
         }
-        assert_eq!(key, "2026-12-31");
+        assert_eq!(key, "2027-01-01");
         for _ in 0..365 {
             key = shift_day_key(&key, -1).unwrap();
         }
