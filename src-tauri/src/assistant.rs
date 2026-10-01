@@ -384,26 +384,7 @@ pub fn parse_answer(raw: &str) -> Result<String, AssistantError> {
             continue;
         };
         for part in parts {
-            let Some(texts) = part.get(1).and_then(|v| v.as_array()) else {
-                continue;
-            };
-            for text in texts {
-                // Each chunk arrives as a tuple whose first field is the
-                // text; a bare string is accepted too, because the shape has
-                // changed between front-end builds. Reading the element
-                // itself as a string returns nothing on the real payload,
-                // which is an empty answer rather than a wrong one.
-                let candidate = match text {
-                    serde_json::Value::String(s) => Some(s.as_str()),
-                    serde_json::Value::Array(fields) => fields.first().and_then(|v| v.as_str()),
-                    _ => None,
-                };
-                if let Some(s) = candidate {
-                    if s.len() > best.len() {
-                        best = s.to_string();
-                    }
-                }
-            }
+            collect_text(part, &mut best);
         }
     }
     let best = strip_artifacts(best.trim());
@@ -414,6 +395,36 @@ pub fn parse_answer(raw: &str) -> Result<String, AssistantError> {
         return Err(AssistantError::AnswerTooLong);
     }
     Ok(best)
+}
+
+/// Keeps the longest piece of answer text found under one node.
+///
+/// The chunks arrive either as bare strings or as tuples whose first field is
+/// the text, and the number of levels between `inner[4]` and the text has
+/// moved between front-end builds. A fixed-depth walk therefore returns
+/// nothing — an empty answer rather than a wrong one — so this walks the whole
+/// subtree and takes anything that looks like text. The answer is far longer
+/// than the metadata around it, so "longest wins" is also what picks the
+/// finished sentence over a streamed fragment.
+fn collect_text(value: &serde_json::Value, best: &mut String) {
+    match value {
+        serde_json::Value::String(s) => {
+            if s.len() > best.len() {
+                *best = s.clone();
+            }
+        }
+        serde_json::Value::Array(items) => {
+            if let Some(serde_json::Value::String(s)) = items.first() {
+                if s.len() > best.len() {
+                    *best = s.clone();
+                }
+            }
+            for item in items {
+                collect_text(item, best);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Google's own error marker, e.g. `BardErrorInfo [1297]`.
