@@ -216,6 +216,11 @@ Data is stored at:
 
 The installer uses the current-user installation mode.
 
+**Prereleases.** `v2.0.0-alpha.1` is published as a
+[prerelease](https://github.com/Ahaduzzamankhan/1boost/releases), so installs on
+the stable line are never offered it by the updater — download it from the
+releases page to try the 2.0 workspace.
+
 ---
 
 ## 🛠️ Development
@@ -248,9 +253,12 @@ npm run tauri:build
 
 ## 🔄 Release flow
 
-1. Update the application version.
+1. Update the application version (`package.json`, `src-tauri/tauri.conf.json`,
+   `src-tauri/Cargo.toml`) and cut the matching `CHANGELOG.md` section.
 2. Build and test the native + frontend layers.
-3. Create a version tag.
+3. Create a version tag — `v2.0.0-alpha.1` style for an alpha/beta. A tag whose
+   suffix is `alpha`/`beta` is published as a GitHub prerelease, which keeps it
+   away from installs on the stable line.
 4. GitHub Actions builds the Windows installer.
 5. Update artifacts are signed.
 6. GitHub Release publishes the installer and updater metadata.
@@ -260,7 +268,7 @@ npm run tauri:build
 
 ## 🗺️ Project status
 
-**Current version: 1.3.2**
+**Current version: 2.0.0-alpha.1** (prerelease · stable line: 1.3.2)
 
 - [x] Usage tracking
 - [x] Application tracking
@@ -273,6 +281,9 @@ npm run tauri:build
 - [x] Differential updates
 - [x] Signed updater
 - [x] Local data recovery
+- [x] Connected workspace (pages, projects, tasks)
+- [x] Global search
+- [x] Command center (Ctrl+K)
 - [ ] More advanced analytics
 - [ ] More monitoring metrics
 - [ ] Further performance optimization

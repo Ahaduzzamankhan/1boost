@@ -6,6 +6,18 @@ section is injected into the GitHub Release body by CI
 
 ## [Unreleased]
 
+## [2.0.0-alpha.1] - 2026-10-01
+
+The first 2.0 build. This is a prerelease: it is published as a GitHub
+prerelease, so installs on the stable 1.3.2 line are **not** offered it through
+the updater. Grab the installer from the release page if you want to try the
+new workspace.
+
+Everything below was developed on this version and is verified there. Notes are
+migrated to pages on first launch (the original `notes.json` is left untouched),
+tasks written by 1.3.x load with empty project/page fields, and the experimental
+AI assistant from 1.3.x is gone for good.
+
 ### Added
 
 - **Global search.** One field that finds pages, projects, tasks, calendar
@@ -133,7 +145,7 @@ section is injected into the GitHub Release body by CI
 
 Added and then withdrawn before the release was cut. The experimental AI
 assistant described below never shipped: it was removed during the workspace
-redesign documented under [Unreleased] and replaced by nothing. The release
+redesign documented under [2.0.0-alpha.1] and replaced by nothing. The release
 number is reused for the redesign.
 
 ## [1.3.1] - 2026-09-30

@@ -3,7 +3,7 @@ import type { Bridge, Clip, PageId, Prefs } from '../shared/types'
 /**
  * Browser-harness only: matches package.json so About/Updates never lie.
  */
-const HARNESS_VERSION = '1.3.2'
+const HARNESS_VERSION = '2.0.0-alpha.1'
 
 declare global {
   interface Window {
