@@ -305,7 +305,11 @@ jobs:
           fi
 
           ASSET="1Boost_${VERSION}_x64-setup.from-${BASE_VERSION}.1bdelta"
+          # The signer writes <file>.sig next to <file>, so renaming only the
+          # patch leaves the signature behind and the upload below looks for a
+          # file that was never created.
           mv raw.1bdelta "$ASSET"
+          mv raw.1bdelta.sig "$ASSET.sig"
           gh release upload "$TAG" "$ASSET" "$ASSET.sig" --clobber
           echo "published ${ASSET} ($(wc -c < "$ASSET") bytes) plus its signature"
 
