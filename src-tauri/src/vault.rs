@@ -645,7 +645,7 @@ fn list_item(line: &str) -> Option<(&'static str, bool, String)> {
         (Some(_), Some(_)) => return None,
         (Some(rest), None) => ("numberedListItem", rest),
         (None, Some(rest)) => ("bulletedListItem", rest),
-        (None, None) => return checkbox(line).map(|(checked, rest)| ("todo", rest)),
+        (None, None) => return checkbox(line).map(|(checked, rest)| ("todo", checked, rest)),
     };
     Some(match checkbox(rest) {
         // `[ ] item` after a marker is a todo, not a bullet — that is how the
@@ -802,7 +802,7 @@ impl Vault {
             .map(|name| {
                 let path = self.dir.join(name);
                 let bytes = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-                (*name, bytes)
+                ((*name).to_string(), bytes)
             })
             .collect()
     }
@@ -836,7 +836,8 @@ impl Vault {
         }
         normalize_page_parents(&mut pages);
 
-        let (mut tasks, tasks_recovered) = read_json(&self.dir.join("tasks.json"));
+        let (mut tasks, tasks_recovered): (Vec<Task>, bool) =
+            read_json(&self.dir.join("tasks.json"));
         self.note_recovered(tasks_recovered);
         for task in tasks.iter_mut() {
             task.normalize();
@@ -1545,7 +1546,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("notes.json"),
-            r#"[{"id":"n1","title":"Release","body":"# Heading\n- one\n- [ ] two\n> quoted\n```\ncode()\n```","tags":["work"],"pinned":true,"createdMs":10,"updatedMs":20}]"#,
+            r##"[{"id":"n1","title":"Release","body":"# Heading\n- one\n- [ ] two\n> quoted\n```\ncode()\n```","tags":["work"],"pinned":true,"createdMs":10,"updatedMs":20}]"##,
         )
         .unwrap();
 

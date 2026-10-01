@@ -102,9 +102,12 @@ pub fn add_local_month(ms: u64, months: i64) -> u64 {
     let last = days_in_month(ny, nm);
     let nd = d.min(last);
     let next = days_from_civil(ny, nm, nd) * 86_400;
-    // Keep the instant's time-of-day; only the date moves.
-    let time_of_day = ms - days.saturating_mul(86_400) * 1000;
-    (next * 1000).saturating_add(time_of_day)
+    // Keep the instant's time-of-day; only the date moves. Deriving the
+    // remainder instead of subtracting midnight keeps this in `u64`, which
+    // the epoch-ms domain is in: there is no earlier instant to underflow to.
+    let time_of_day = ms % 86_400_000;
+    let next_ms = (next.max(0) as u64).saturating_mul(1000);
+    next_ms.saturating_add(time_of_day)
 }
 
 fn days_in_month(y: i64, m: i64) -> i64 {
