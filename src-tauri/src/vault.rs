@@ -1701,7 +1701,7 @@ mod tests {
             blocked_by: vec![a.id.clone(), a.id.clone(), String::new()],
             ..Default::default()
         });
-        assert_eq!(v.tasks().iter().find(|t| t.id == b.id).unwrap().blocked_by, vec![a.id]);
+        assert_eq!(v.tasks().iter().find(|t| t.id == b.id).unwrap().blocked_by, vec![a.id.clone()]);
         // Deleting the blocker removes it from the blocked task's list.
         v.delete_task(&a.id);
         assert!(v.tasks()[0].blocked_by.is_empty());

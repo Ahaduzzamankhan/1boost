@@ -284,24 +284,25 @@ mod tests {
     #[test]
     fn month_arithmetic_clamps_to_the_end_of_a_short_month() {
         // 2026-01-31 + 1 month has no 31st, so it lands on the 28th.
-        let jan31 = days_from_civil(2026, 1, 31) * 86_400 * 1000;
+        let jan31 = (days_from_civil(2026, 1, 31) * 86_400 * 1000) as u64;
         assert_eq!(day_key(add_local_month(jan31, 1)), "2026-02-28");
         // Forward and backward across a year boundary.
-        let dec = days_from_civil(2026, 12, 15) * 86_400 * 1000;
+        let dec = (days_from_civil(2026, 12, 15) * 86_400 * 1000) as u64;
         assert_eq!(day_key(add_local_month(dec, 1)), "2027-01-15");
         assert_eq!(day_key(add_local_month(dec, -12)), "2025-12-15");
         // A leap year still gets its 29th.
-        let jan = days_from_civil(2028, 1, 31) * 86_400 * 1000;
+        let jan = (days_from_civil(2028, 1, 31) * 86_400 * 1000) as u64;
         assert_eq!(day_key(add_local_month(jan, 1)), "2028-02-29");
         // The time of day survives the move.
         let with_time = jan + 13 * 3_600_000 + 45 * 60_000;
         let moved = add_local_month(with_time, 1);
-        assert_eq!(moved - days_from_civil(2028, 2, 29) * 86_400 * 1000, 13 * 3_600_000 + 45 * 60_000);
+        let feb29 = (days_from_civil(2028, 2, 29) * 86_400 * 1000) as u64;
+        assert_eq!(moved - feb29, 13 * 3_600_000 + 45 * 60_000);
     }
 
     #[test]
     fn local_weekday_matches_the_day_key() {
-        let monday = days_from_civil(2026, 9, 28) * 86_400 * 1000;
+        let monday = (days_from_civil(2026, 9, 28) * 86_400 * 1000) as u64;
         assert_eq!(local_weekday(monday), 1);
         assert_eq!(local_weekday(monday + 6 * 86_400_000), 0, "the next Sunday");
     }
