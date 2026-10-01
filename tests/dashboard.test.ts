@@ -131,9 +131,26 @@ describe('navigation', () => {
   const registry = read('src/modules/registry.tsx')
 
   it('has no System workspace left', () => {
-    expect(registry).toContain("export type WorkspaceId = 'insight' | 'capture' | 'utilities'")
+    expect(registry).toContain("export type WorkspaceId = 'insight' | 'workspace' | 'utilities'")
     expect(registry).not.toContain("id: 'system'")
     expect(registry).not.toContain("| 'system'")
+  })
+
+  it('has no AI module or AI pref left anywhere in the renderer', () => {
+    // The experimental assistant was removed outright, not hidden behind a
+    // flag: a module the user cannot reach is still code to maintain.
+    expect(registry).not.toContain('assistant')
+    expect(registry).not.toContain('experimentalAi')
+    for (const file of [
+      'src/modules/registry.tsx',
+      'src/bridge.ts',
+      'src/state.ts',
+      'shared/types.ts',
+      'src/pages/SettingsPage.tsx',
+    ]) {
+      const source = read(file)
+      expect(source, `${file} still mentions the assistant`).not.toMatch(/experimentalAi|aiStatus|aiAsk|AiStatus/)
+    }
   })
 
   it('keeps Settings reachable, now as a footer entry', () => {

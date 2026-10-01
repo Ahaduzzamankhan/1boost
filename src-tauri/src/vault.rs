@@ -1,4 +1,4 @@
-//! Productivity vault — notes, tasks and clipboard history.
+//! Productivity vault — the workspace: pages, tasks and clipboard history.
 //!
 //! Deliberately separate from `storage.rs`: usage data keeps its own
 //! byte-compatible files, and everything added here lives in its own files
@@ -7,9 +7,22 @@
 //!
 //! Each collection is a small JSON document written atomically through a
 //! temp file + rename, the same durability contract the usage store uses.
+//!
+//! The model is one connected workspace rather than two apps:
+//!
+//! * A [`Page`] is a tree of blocks. Pages nest through `parent_id`.
+//! * A [`Task`] belongs to an optional project page and an optional source
+//!   page, nests through `parent_id`, and can point at other tasks.
+//! * A page can reference tasks (a `task` block) and other pages (a `page`
+//!   block), which is what the dashboard and the backlink panel walk.
+//!
+//! Migration: 1.3.2 shipped plain notes in `notes.json`. On first load of a
+//! workspace that has no `pages.json`, every note becomes a page and its plain
+//! body is parsed into blocks with the markdown shortcuts the editor itself
+//! uses, so an upgrade keeps the text and gains the structure.
 
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -18,15 +31,18 @@ use std::sync::Mutex;
 use crate::util::LockOk;
 
 const MAX_CLIPS: usize = 500;
-const MAX_NOTES: usize = 5000;
+const MAX_PAGES: usize = 5000;
 const MAX_TASKS: usize = 5000;
+/// Deepest a page tree may nest. Also the editor's indentation limit, so the
+/// two can never disagree about what a valid hierarchy looks like.
+pub const MAX_DEPTH: u32 = 8;
 
 fn now_ms() -> u64 {
     crate::util::now_ms()
 }
 
 /// Monotonic-ish id: millis + a counter. No uuid dependency, and ids stay
-/// unique when two notes are created inside the same millisecond.
+/// unique when two pages are created inside the same millisecond.
 fn new_id(prefix: &str) -> String {
     use std::sync::atomic::{AtomicU32, Ordering};
     static COUNTER: AtomicU32 = AtomicU32::new(0);
@@ -64,25 +80,110 @@ fn write_json<T: Serialize>(path: &Path, value: &T) {
 // Records
 // ---------------------------------------------------------------------------
 
+/// Every block kind the editor understands. Anything else is stored verbatim
+/// but rendered as a paragraph, so a file written by a future build still
+/// loads (and round-trips) in an older one.
+pub const BLOCK_KINDS: [&str; 15] = [
+    "paragraph",
+    "heading1",
+    "heading2",
+    "heading3",
+    "bulletedListItem",
+    "numberedListItem",
+    "todo",
+    "quote",
+    "callout",
+    "code",
+    "divider",
+    "image",
+    "table",
+    "task",
+    "page",
+];
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Block {
+    #[serde(default)]
+    pub id: String,
+    /// One of [`BLOCK_KINDS`]; unknown values degrade to a paragraph.
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub text: String,
+    /// Todo state. Kept on every block so a future checkbox does not need a
+    /// field added to the format.
+    #[serde(default)]
+    pub checked: bool,
+    /// For `task` and `page` blocks: the id of what this block points at.
+    #[serde(default)]
+    pub meta: String,
+    /// Code language, image URL, callout tone, or — for `table`-shaped
+    /// content — rows. Kept as a plain string so the format stays flat and
+    /// forward-compatible; see [`parse_table_rows`] / [`join_table_rows`].
+    #[serde(default)]
+    pub extra: String,
+}
+
+impl Block {
+    pub fn new(kind: &str, text: &str) -> Block {
+        Block { id: new_id("b"), kind: normalize_kind(kind), text: text.to_string(), ..Default::default() }
+    }
+
+    fn normalize(&mut self) {
+        if self.id.is_empty() {
+            self.id = new_id("b");
+        }
+        self.kind = normalize_kind(&self.kind);
+        // Blocks carry a hard size budget: a page is saved whole, and an
+        // unbounded block would turn one paste into a multi-megabyte write.
+        if self.text.chars().count() > 20_000 {
+            self.text = self.text.chars().take(20_000).collect();
+        }
+        if self.extra.chars().count() > 8_000 {
+            self.extra = self.extra.chars().take(8_000).collect();
+        }
+    }
+}
+
+fn normalize_kind(kind: &str) -> String {
+    if BLOCK_KINDS.contains(&kind) {
+        kind.to_string()
+    } else {
+        "paragraph".to_string()
+    }
+}
+
+/// A page in the workspace. `parent_id` empty means top level.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct Note {
+pub struct Page {
     #[serde(default)]
     pub id: String,
     #[serde(default)]
     pub title: String,
+    /// Emoji, one grapheme or so. Purely cosmetic.
     #[serde(default)]
-    pub body: String,
+    pub icon: String,
+    #[serde(default)]
+    pub parent_id: String,
+    #[serde(default)]
+    pub blocks: Vec<Block>,
     #[serde(default)]
     pub tags: Vec<String>,
     #[serde(default)]
-    pub pinned: bool,
+    pub favorite: bool,
+    #[serde(default)]
+    pub archived: bool,
     #[serde(default)]
     pub created_ms: u64,
     #[serde(default)]
     pub updated_ms: u64,
 }
 
+/// A task. `done` is retained for files written before 1.4 and is kept in sync
+/// with `status` on load and save, so there is only ever one source of truth
+/// once a task has been through this code path.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Task {
@@ -92,19 +193,105 @@ pub struct Task {
     pub title: String,
     #[serde(default)]
     pub done: bool,
+    /// `todo` | `doing` | `blocked` | `done`.
     #[serde(default)]
-    pub due_ms: Option<u64>,
+    pub status: String,
     /// 0 = none, 1 = low, 2 = medium, 3 = high.
     #[serde(default)]
     pub priority: u8,
     #[serde(default)]
+    pub due_ms: Option<u64>,
+    #[serde(default)]
     pub tags: Vec<String>,
+    /// Page this task belongs to as part of a project.
+    #[serde(default)]
+    pub project_id: String,
+    /// Page the task was written on. This is the link the dashboard and the
+    /// page's task panel walk back to.
+    #[serde(default)]
+    pub page_id: String,
+    /// Parent task id, for subtasks.
+    #[serde(default)]
+    pub parent_id: String,
+    /// Task ids this one is blocked by.
+    #[serde(default)]
+    pub blocked_by: Vec<String>,
+    /// `''` | `daily` | `weekdays` | `weekly` | `monthly` | `yearly`.
+    #[serde(default)]
+    pub recurrence: String,
+    /// Sort order inside a board column.
+    #[serde(default)]
+    pub order: i64,
     #[serde(default)]
     pub created_ms: u64,
     #[serde(default)]
     pub updated_ms: u64,
     #[serde(default)]
     pub completed_ms: Option<u64>,
+}
+
+pub const TASK_STATUSES: [&str; 4] = ["todo", "doing", "blocked", "done"];
+pub const RECURRENCES: [&str; 5] = ["", "daily", "weekdays", "weekly", "monthly"];
+
+impl Task {
+    /// Reconciles the legacy `done` flag with `status` and clamps everything
+    /// that came off disk. Called on every load and every save.
+    fn normalize(&mut self) {
+        if self.id.is_empty() {
+            self.id = new_id("t");
+        }
+        if self.status.is_empty() {
+            // Pre-1.4 task: `done` was the only state that existed.
+            self.status = if self.done { "done".into() } else { "todo".into() };
+        }
+        if !TASK_STATUSES.contains(&self.status.as_str()) {
+            self.status = "todo".into();
+        }
+        self.done = self.status == "done";
+        self.title = self.title.trim().to_string();
+        if self.title.chars().count() > 500 {
+            self.title = self.title.chars().take(500).collect();
+        }
+        self.tags = normalize_tags(std::mem::take(&mut self.tags));
+        self.priority = self.priority.min(3);
+        if !RECURRENCES.contains(&self.recurrence.as_str()) {
+            self.recurrence = String::new();
+        }
+        if self.status == "done" && self.completed_ms.is_none() {
+            self.completed_ms = Some(now_ms());
+        }
+        if self.status != "done" {
+            self.completed_ms = None;
+        }
+        // A task blocked by something that no longer exists would sit in
+        // "blocked" forever, so a self-reference and empty ids are dropped.
+        self.blocked_by.retain(|id| !id.is_empty() && id != &self.id);
+    }
+
+    /// Next due date for a recurring task, given when it was completed.
+    /// `None` when the task does not recur.
+    pub fn next_due(&self) -> Option<u64> {
+        let from = self.completed_ms.unwrap_or_else(now_ms);
+        let day = 86_400_000u64;
+        match self.recurrence.as_str() {
+            "daily" => Some(from + day),
+            "weekdays" => {
+                // Step to the next day that is not Saturday or Sunday.
+                let mut next = from + day;
+                for _ in 0..7 {
+                    let dow = crate::util::local_weekday(next);
+                    if dow != 0 && dow != 6 {
+                        return Some(next);
+                    }
+                    next += day;
+                }
+                Some(next)
+            }
+            "weekly" => Some(from + 7 * day),
+            "monthly" => Some(crate::util::add_local_month(from, 1)),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -127,13 +314,282 @@ pub struct ClipPayload {
     pub clips: Vec<Clip>,
 }
 
+/// A 1.3.2 note, read only so its content can be migrated into a page. Never
+/// written back: once `pages.json` exists this type is dead weight on disk.
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct LegacyNote {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    body: String,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    pinned: bool,
+    #[serde(default)]
+    created_ms: u64,
+    #[serde(default)]
+    updated_ms: u64,
+}
+
+// ---------------------------------------------------------------------------
+// Block text helpers (search previews, markdown export, migration)
+// ---------------------------------------------------------------------------
+
+/// Table-shaped content is stored as rows joined by newlines, cells by tabs.
+/// Keeping it out of a nested array means an older build cannot fail to parse
+/// a file because it does not know about a column count.
+pub fn parse_table_rows(extra: &str) -> Vec<Vec<String>> {
+    extra
+        .split('\n')
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| line.split('\t').map(|c| c.to_string()).collect())
+        .collect()
+}
+
+pub fn join_table_rows(rows: &[Vec<String>]) -> String {
+    rows.iter()
+        .map(|row| row.join("\t"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The block's text as it would read on a page. Used for search previews and
+/// for the markdown export, so both agree with the editor.
+pub fn block_label(block: &Block) -> String {
+    match block.kind.as_str() {
+        "todo" => {
+            if block.checked {
+                format!("[x] {}", block.text)
+            } else {
+                format!("[ ] {}", block.text)
+            }
+        }
+        "divider" => "—".to_string(),
+        "table" => parse_table_rows(&block.extra)
+            .into_iter()
+            .map(|row| row.join(" | "))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => block.text.clone(),
+    }
+}
+
+/// Every page's text flattened into one searchable string.
+pub fn page_text(page: &Page) -> String {
+    page.blocks.iter().map(block_label).collect::<Vec<_>>().join("\n")
+}
+
+fn parse_table_line(line: &str) -> Vec<String> {
+    line.trim()
+        .trim_start_matches('|')
+        .trim_end_matches('|')
+        .split('|')
+        .map(|c| c.trim().to_string())
+        .collect()
+}
+
+fn is_table_divider(line: &str) -> bool {
+    let t = line.trim();
+    t.starts_with('|')
+        && t.contains('-')
+        && t.chars().all(|c| c == '|' || c == '-' || c == ':' || c.is_whitespace())
+}
+
+/// Turns a plain markdown-ish body into blocks.
+///
+/// This is the same vocabulary the editor produces from its markdown
+/// shortcuts, so a migrated note and a note typed after the upgrade are the
+/// same document. Anything unrecognized becomes a paragraph — losing the
+/// distinction would be worse than keeping it as text.
+pub fn body_to_blocks(body: &str) -> Vec<Block> {
+    let lines: Vec<&str> = body.lines().collect();
+    let mut blocks: Vec<Block> = Vec::new();
+    let mut i = 0;
+    // Fenced code accumulates into a buffer so the fence markers and the
+    // language tag do not leak into the block's text.
+    let mut code: Option<String> = None;
+
+    while i < lines.len() {
+        let raw = lines[i];
+
+        if let Some(buf) = code.as_mut() {
+            // An unterminated fence at the end of the note is still code.
+            if raw.trim_start().starts_with("```") {
+                let text = std::mem::take(buf);
+                let language = raw.trim_start_matches('`').trim().to_string();
+                let mut block = Block::new("code", text.trim_end_matches('\n'));
+                block.extra = language;
+                blocks.push(block);
+                code = None;
+            } else {
+                buf.push_str(raw);
+                buf.push('\n');
+            }
+            i += 1;
+            continue;
+        }
+
+        let trimmed = raw.trim();
+
+        if trimmed.starts_with("```") {
+            code = Some(String::new());
+            i += 1;
+            continue;
+        }
+        if trimmed.is_empty() {
+            i += 1;
+            continue;
+        }
+        if trimmed == "---" || trimmed == "***" || trimmed == "___" {
+            blocks.push(Block::new("divider", ""));
+            i += 1;
+            continue;
+        }
+        if let Some(kind) = markdown_heading(trimmed) {
+            blocks.push(Block::new(kind, trimmed.splitn(2, ' ').nth(1).unwrap_or("").trim()));
+            i += 1;
+            continue;
+        }
+        if let Some((kind, checked, text)) = quote_or_callout(trimmed) {
+            let mut block = Block::new(kind, &text);
+            if kind == "callout" {
+                block.extra = checked;
+            }
+            blocks.push(block);
+            i += 1;
+            continue;
+        }
+        if let Some((kind, checked, text)) = list_item(trimmed) {
+            let mut block = Block::new(kind, &text);
+            if kind == "todo" {
+                block.checked = checked;
+            }
+            blocks.push(block);
+            i += 1;
+            continue;
+        }
+        if trimmed.starts_with('|') {
+            // Collect the whole run of pipe lines into one block.
+            let mut rows = vec![parse_table_line(trimmed)];
+            i += 1;
+            while i < lines.len() {
+                let t = lines[i].trim();
+                // The `|---|` alignment row is presentation, not content.
+                if is_table_divider(t) {
+                    i += 1;
+                    continue;
+                }
+                if !t.starts_with('|') {
+                    break;
+                }
+                rows.push(parse_table_line(t));
+                i += 1;
+            }
+            let mut block = Block::new("table", "");
+            block.extra = join_table_rows(&rows);
+            blocks.push(block);
+            continue;
+        }
+        blocks.push(Block::new("paragraph", trimmed));
+        i += 1;
+    }
+
+    if let Some(buf) = code {
+        blocks.push(Block::new("code", buf.trim_end_matches('\n')));
+    }
+    for b in blocks.iter_mut() {
+        b.normalize();
+    }
+    blocks
+}
+
+/// `> text` is a quote; `> [!note] text` is a callout whose tone is returned
+/// alongside the text.
+fn quote_or_callout(line: &str) -> Option<(&'static str, String, String)> {
+    let rest = line.strip_prefix("> ").or_else(|| line.strip_prefix('>'))?;
+    let text = rest.trim().to_string();
+    // `> [!note] text` is the editor's callout form; the token between the
+    // brackets is its tone.
+    if text.starts_with("[!") {
+        if let Some(close) = text.find(']') {
+            return Some((
+                "callout",
+                text[2..close].trim().to_lowercase(),
+                text[close + 1..].trim().to_string(),
+            ));
+        }
+    }
+    Some(("quote", String::new(), text))
+}
+
+fn markdown_heading(line: &str) -> Option<&'static str> {
+    for (hashes, kind) in [("#", "heading1"), ("##", "heading2"), ("###", "heading3")] {
+        if let Some(rest) = line.strip_prefix(hashes) {
+            if rest.starts_with(' ') {
+                return Some(kind);
+            }
+        }
+    }
+    None
+}
+
+/// `- item`, `* item`, `1. item`, `1. [ ] item`, `- [ ] item`.
+///
+/// The list marker is stripped *before* the checkbox is looked for, because
+/// `- [ ] item` is the form people actually write and checking for `[ ]` on
+/// the whole line would silently turn every checkbox into a bullet.
+fn list_item(line: &str) -> Option<(&'static str, bool, String)> {
+    let digits: String = line.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let body = if !digits.is_empty() && digits.len() <= 3 {
+        match line[digits.len()..].strip_prefix(". ") {
+            Some(rest) => Some(rest.trim()),
+            None => None,
+        }
+    } else {
+        None
+    };
+    let plain = ["- ", "* ", "+ "].iter().find_map(|m| line.strip_prefix(m));
+    let (kind, rest) = match (body, plain) {
+        (Some(_), Some(_)) => return None,
+        (Some(rest), None) => ("numberedListItem", rest),
+        (None, Some(rest)) => ("bulletedListItem", rest),
+        (None, None) => return checkbox(line).map(|(checked, rest)| ("todo", rest)),
+    };
+    Some(match checkbox(rest) {
+        // `[ ] item` after a marker is a todo, not a bullet — that is how the
+        // editor's own markdown shortcut writes it.
+        Some((checked, text)) => ("todo", checked, text),
+        None => (kind, false, rest.trim().to_string()),
+    })
+}
+
+/// `[ ] item` / `[x] item` → (checked, text).
+fn checkbox(line: &str) -> Option<(bool, String)> {
+    for (open, checked) in [("[ ] ", false), ("[x] ", true), ("[X] ", true)] {
+        if let Some(rest) = line.strip_prefix(open) {
+            return Some((checked, rest.trim().to_string()));
+        }
+    }
+    // Also accept the marker with no trailing space: `- [ ]done`.
+    for (open, checked) in [("[ ]", false), ("[x]", true), ("[X]", true)] {
+        if let Some(rest) = line.strip_prefix(open) {
+            return Some((checked, rest.trim().to_string()));
+        }
+    }
+    None
+}
+
 // ---------------------------------------------------------------------------
 // Vault
 // ---------------------------------------------------------------------------
 
 pub struct Vault {
     dir: PathBuf,
-    notes: Mutex<Vec<Note>>,
+    pages: Mutex<Vec<Page>>,
     tasks: Mutex<Vec<Task>>,
     clips: Mutex<Vec<Clip>>,
     /// Text currently on the Windows clipboard, so polling only records real
@@ -146,7 +602,7 @@ impl Vault {
         let _ = fs::create_dir_all(&base);
         let vault = Vault {
             dir: base,
-            notes: Mutex::new(Vec::new()),
+            pages: Mutex::new(Vec::new()),
             tasks: Mutex::new(Vec::new()),
             clips: Mutex::new(Vec::new()),
             last_clip: Mutex::new(String::new()),
@@ -156,20 +612,83 @@ impl Vault {
     }
 
     fn load(&self) {
-        let notes: Vec<Note> = read_json(&self.dir.join("notes.json"));
-        let tasks: Vec<Task> = read_json(&self.dir.join("tasks.json"));
+        let pages_path = self.dir.join("pages.json");
+        let mut pages: Vec<Page> = if pages_path.exists() {
+            read_json(&pages_path)
+        } else {
+            // First run after the workspace redesign: adopt the old notes.
+            let migrated = self.migrate_legacy_notes();
+            if !migrated.is_empty() {
+                log::info!(
+                    "[1boost] migrated {} note(s) into the page workspace",
+                    migrated.len()
+                );
+                write_json(&pages_path, &migrated);
+            }
+            migrated
+        };
+        for page in pages.iter_mut() {
+            for block in page.blocks.iter_mut() {
+                block.normalize();
+            }
+        }
+        normalize_page_parents(&mut pages);
+
+        let mut tasks: Vec<Task> = read_json(&self.dir.join("tasks.json"));
+        for task in tasks.iter_mut() {
+            task.normalize();
+        }
+        // A task whose page was removed during migration keeps its id but
+        // loses a parent that no longer exists.
+        let page_ids: BTreeSet<String> = pages.iter().map(|p| p.id.clone()).collect();
+        for task in tasks.iter_mut() {
+            if !task.page_id.is_empty() && !page_ids.contains(&task.page_id) {
+                task.page_id.clear();
+            }
+            if !task.project_id.is_empty() && !page_ids.contains(&task.project_id) {
+                task.project_id.clear();
+            }
+        }
+
         let clip_payload: ClipPayload = read_json(&self.dir.join("clipboard.json"));
-        *self.notes.lock_ok() = notes;
+        *self.pages.lock_ok() = pages;
         *self.tasks.lock_ok() = tasks;
         *self.clips.lock_ok() = clip_payload.clips;
     }
 
-    fn save_notes(&self) {
-        write_json(&self.dir.join("notes.json"), &*self.notes.lock_ok());
+    /// Reads `notes.json` and turns each note into a page. The legacy file is
+    /// left on disk: deleting user data during an upgrade is not something a
+    /// migration should do on its own.
+    fn migrate_legacy_notes(&self) -> Vec<Page> {
+        let notes: Vec<LegacyNote> = read_json(&self.dir.join("notes.json"));
+        notes
+            .into_iter()
+            .filter(|n| !n.id.is_empty() || !n.title.is_empty() || !n.body.is_empty())
+            .map(|n| Page {
+                id: if n.id.is_empty() { new_id("p") } else { n.id },
+                title: n.title.trim().to_string(),
+                icon: String::new(),
+                parent_id: String::new(),
+                blocks: body_to_blocks(&n.body),
+                tags: normalize_tags(n.tags),
+                // "Pinned" was the old favourites control; carry it across so
+                // an upgrade does not silently drop someone's shortlist.
+                favorite: n.pinned,
+                archived: false,
+                created_ms: n.created_ms,
+                updated_ms: n.updated_ms,
+            })
+            .collect()
+    }
+
+    fn save_pages(&self) {
+        let pages = self.pages.lock_ok().clone();
+        write_json(&self.dir.join("pages.json"), &pages);
     }
 
     fn save_tasks(&self) {
-        write_json(&self.dir.join("tasks.json"), &*self.tasks.lock_ok());
+        let tasks = self.tasks.lock_ok().clone();
+        write_json(&self.dir.join("tasks.json"), &tasks);
     }
 
     fn save_clips(&self) {
@@ -177,56 +696,146 @@ impl Vault {
         write_json(&self.dir.join("clipboard.json"), &ClipPayload { clips });
     }
 
-    // ----- notes ----------------------------------------------------------
+    // ----- pages ----------------------------------------------------------
 
-    pub fn notes(&self) -> Vec<Note> {
-        let mut list = self.notes.lock_ok().clone();
+    pub fn pages(&self) -> Vec<Page> {
+        let mut list = self.pages.lock_ok().clone();
         list.sort_by(|a, b| {
-            b.pinned.cmp(&a.pinned).then(b.updated_ms.cmp(&a.updated_ms))
+            b.favorite
+                .cmp(&a.favorite)
+                .then(a.title.to_lowercase().cmp(&b.title.to_lowercase()))
         });
         list
     }
 
-    pub fn save_note(&self, mut note: Note) -> Note {
-        if note.id.is_empty() {
-            note.id = new_id("n");
-            note.created_ms = now_ms();
+    pub fn save_page(&self, mut page: Page) -> Page {
+        if page.id.is_empty() {
+            page.id = new_id("p");
+            page.created_ms = now_ms();
         }
-        if note.created_ms == 0 {
-            note.created_ms = now_ms();
+        if page.created_ms == 0 {
+            page.created_ms = now_ms();
         }
-        note.updated_ms = now_ms();
-        note.title = note.title.trim().to_string();
-        note.tags = normalize_tags(note.tags);
-        let mut list = self.notes.lock_ok();
-        match list.iter().position(|n| n.id == note.id) {
-            Some(i) => list[i] = note.clone(),
+        page.updated_ms = now_ms();
+        page.title = page.title.trim().chars().take(200).collect();
+        if page.icon.chars().count() > 8 {
+            page.icon = page.icon.chars().take(8).collect();
+        }
+        page.tags = normalize_tags(page.tags);
+        for block in page.blocks.iter_mut() {
+            block.normalize();
+        }
+        if page.blocks.len() > 2_000 {
+            page.blocks.truncate(2_000);
+        }
+
+        let mut list = self.pages.lock_ok();
+        // Re-parenting may create a cycle (a page moved under its own
+        // descendant). Reject it and keep the old parent rather than storing a
+        // tree the renderer cannot draw.
+        if !page.parent_id.is_empty() {
+            if page.parent_id == page.id || self.would_cycle(&list, &page.id, &page.parent_id) {
+                page.parent_id = String::new();
+            } else if self.depth_of(&list, &page.parent_id) >= MAX_DEPTH {
+                page.parent_id = String::new();
+            }
+        }
+        match list.iter().position(|p| p.id == page.id) {
+            Some(i) => list[i] = page.clone(),
             None => {
-                list.push(note.clone());
-                // Drop the oldest unpinned note if the user goes wild.
-                if list.len() > MAX_NOTES {
-                    if let Some(pos) = list.iter().position(|n| !n.pinned) {
+                list.push(page.clone());
+                // Drop the oldest unstarred page if the user goes wild.
+                if list.len() > MAX_PAGES {
+                    if let Some(pos) = list.iter().position(|p| !p.favorite) {
                         list.remove(pos);
                     }
                 }
             }
         }
-        let out = note.clone();
+        let out = page.clone();
         drop(list);
-        self.save_notes();
+        self.save_pages();
         out
     }
 
-    pub fn delete_note(&self, id: &str) -> bool {
-        let mut list = self.notes.lock_ok();
+    fn would_cycle(&self, list: &[Page], id: &str, parent_id: &str) -> bool {
+        let by_id: BTreeMap<&str, &str> =
+            list.iter().map(|p| (p.id.as_str(), p.parent_id.as_str())).collect();
+        let mut seen: BTreeSet<&str> = BTreeSet::new();
+        let mut cursor = parent_id;
+        while !cursor.is_empty() {
+            if cursor == id {
+                return true;
+            }
+            if !seen.insert(cursor) {
+                // A pre-existing cycle would already hang the walk; stop.
+                return true;
+            }
+            match by_id.get(cursor).copied() {
+                Some(next) => cursor = next,
+                None => return false,
+            }
+        }
+        false
+    }
+
+    /// How deep `id` sits in the existing tree, used to keep a page from being
+    /// nested past [`MAX_DEPTH`] even when the move would not create a cycle.
+    fn depth_of(&self, list: &[Page], id: &str) -> u32 {
+        let by_id: BTreeMap<&str, &str> =
+            list.iter().map(|p| (p.id.as_str(), p.parent_id.as_str())).collect();
+        let mut depth = 0u32;
+        let mut seen: BTreeSet<&str> = BTreeSet::new();
+        let mut cursor = id;
+        // The `seen` set bounds this even if a corrupted file already contains
+        // a cycle, so a bad parent cannot hang the save.
+        while depth <= MAX_DEPTH * 4 {
+            // `.copied()` turns the `&&str` that `get` returns back into the
+            // `&str` the map was built from, so `cursor` stays a plain borrow.
+            let Some(parent) = by_id.get(cursor).copied() else { break };
+            if parent.is_empty() || !seen.insert(parent) {
+                break;
+            }
+            depth += 1;
+            cursor = parent;
+        }
+        depth
+    }
+
+    /// Deletes a page and everything nested under it.
+    pub fn delete_page(&self, id: &str) -> bool {
+        let mut list = self.pages.lock_ok();
+        let ids = descendant_ids(&list, id);
         let before = list.len();
-        list.retain(|n| n.id != id);
+        list.retain(|p| !ids.contains(&p.id));
         let changed = list.len() != before;
         drop(list);
-        if changed {
-            self.save_notes();
+        if !changed {
+            return false;
         }
-        changed
+        // Tasks that lived on a deleted page are kept — losing them because a
+        // page was tidied away would be the worst possible surprise — but they
+        // no longer claim a parent that is gone.
+        {
+            let mut tasks = self.tasks.lock_ok();
+            let mut touched = false;
+            for task in tasks.iter_mut() {
+                if ids.contains(&task.page_id) {
+                    task.page_id.clear();
+                    touched = true;
+                }
+                if ids.contains(&task.project_id) {
+                    task.project_id.clear();
+                    touched = true;
+                }
+            }
+            if touched {
+                drop(tasks);
+                self.save_tasks();
+            }
+        }
+        self.save_pages();
+        true
     }
 
     // ----- tasks ----------------------------------------------------------
@@ -238,6 +847,7 @@ impl Vault {
                 .cmp(&b.done)
                 .then(b.priority.cmp(&a.priority))
                 .then(a.due_ms.cmp(&b.due_ms))
+                .then(a.order.cmp(&b.order))
                 .then(a.created_ms.cmp(&b.created_ms))
         });
         list
@@ -252,25 +862,18 @@ impl Vault {
             task.created_ms = now_ms();
         }
         task.updated_ms = now_ms();
-        task.title = task.title.trim().to_string();
+        task.normalize();
         if task.title.is_empty() {
             return task;
-        }
-        task.tags = normalize_tags(task.tags);
-        task.priority = task.priority.min(3);
-        if task.done && task.completed_ms.is_none() {
-            task.completed_ms = Some(now_ms());
-        }
-        if !task.done {
-            task.completed_ms = None;
         }
         let mut list = self.tasks.lock_ok();
         match list.iter().position(|t| t.id == task.id) {
             Some(i) => list[i] = task.clone(),
             None => {
+                task.order = list.len() as i64;
                 list.push(task.clone());
                 if list.len() > MAX_TASKS {
-                    if let Some(pos) = list.iter().position(|t| !t.done) {
+                    if let Some(pos) = list.iter().position(|t| t.status != "done") {
                         list.remove(pos);
                     }
                 }
@@ -285,9 +888,21 @@ impl Vault {
     pub fn toggle_task(&self, id: &str) -> Option<Task> {
         let mut list = self.tasks.lock_ok();
         let task = list.iter_mut().find(|t| t.id == id)?;
-        task.done = !task.done;
-        task.updated_ms = now_ms();
-        task.completed_ms = if task.done { Some(now_ms()) } else { None };
+        let now = now_ms();
+        if task.status == "done" {
+            task.status = "todo".into();
+            task.completed_ms = None;
+            // Completing a recurring task moves its due date instead of
+            // closing it forever, which is the whole point of recurring.
+            if let Some(next) = task.next_due() {
+                task.due_ms = Some(next);
+            }
+        } else {
+            task.status = "done".into();
+            task.completed_ms = Some(now);
+        }
+        task.done = task.status == "done";
+        task.updated_ms = now;
         let out = task.clone();
         drop(list);
         self.save_tasks();
@@ -296,8 +911,13 @@ impl Vault {
 
     pub fn delete_task(&self, id: &str) -> bool {
         let mut list = self.tasks.lock_ok();
+        let ids = descendant_task_ids(&list, id);
         let before = list.len();
-        list.retain(|t| t.id != id);
+        list.retain(|t| !ids.contains(&t.id));
+        // Anything waiting on a deleted task stops waiting on it.
+        for task in list.iter_mut() {
+            task.blocked_by.retain(|b| !ids.contains(b));
+        }
         let changed = list.len() != before;
         drop(list);
         if changed {
@@ -309,7 +929,7 @@ impl Vault {
     pub fn clear_done_tasks(&self) -> usize {
         let mut list = self.tasks.lock_ok();
         let before = list.len();
-        list.retain(|t| !t.done);
+        list.retain(|t| t.status != "done");
         let removed = before - list.len();
         drop(list);
         if removed > 0 {
@@ -411,7 +1031,7 @@ impl Vault {
 }
 
 fn normalize_tags(tags: Vec<String>) -> Vec<String> {
-    let mut seen = std::collections::BTreeSet::new();
+    let mut seen = BTreeSet::new();
     let mut out = Vec::new();
     for t in tags {
         let t = t.trim().trim_start_matches('#').to_lowercase();
@@ -423,6 +1043,72 @@ fn normalize_tags(tags: Vec<String>) -> Vec<String> {
     }
     out.sort();
     out
+}
+
+/// A page and every page beneath it.
+fn descendant_ids(pages: &[Page], id: &str) -> BTreeSet<String> {
+    let mut ids = BTreeSet::new();
+    if id.is_empty() || !ids.insert(id.to_string()) {
+        return ids;
+    }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for page in pages {
+            if !page.parent_id.is_empty()
+                && ids.contains(&page.parent_id)
+                && ids.insert(page.id.clone())
+            {
+                changed = true;
+            }
+        }
+    }
+    ids
+}
+
+fn descendant_task_ids(tasks: &[Task], id: &str) -> BTreeSet<String> {
+    let mut ids = BTreeSet::new();
+    if id.is_empty() || !ids.insert(id.to_string()) {
+        return ids;
+    }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for task in tasks {
+            if !task.parent_id.is_empty()
+                && ids.contains(&task.parent_id)
+                && ids.insert(task.id.clone())
+            {
+                changed = true;
+            }
+        }
+    }
+    ids
+}
+
+/// Detaches orphans and breaks pre-existing cycles so the renderer can always
+/// walk the tree. Runs once, after load.
+fn normalize_page_parents(pages: &mut [Page]) {
+    let ids: BTreeSet<String> = pages.iter().map(|p| p.id.clone()).collect();
+    for page in pages.iter_mut() {
+        if !page.parent_id.is_empty() && !ids.contains(&page.parent_id) {
+            page.parent_id.clear();
+        }
+    }
+    let parents: BTreeMap<String, String> =
+        pages.iter().map(|p| (p.id.clone(), p.parent_id.clone())).collect();
+    for page in pages.iter_mut() {
+        let mut seen: BTreeSet<String> = BTreeSet::new();
+        seen.insert(page.id.clone());
+        let mut cursor = page.parent_id.clone();
+        while !cursor.is_empty() {
+            if !seen.insert(cursor.clone()) {
+                page.parent_id.clear();
+                break;
+            }
+            cursor = parents.get(&cursor).cloned().unwrap_or_default();
+        }
+    }
 }
 
 /// One hit from the universal search.
@@ -472,7 +1158,7 @@ fn fuzzy_score(haystack: &str, needle: &str) -> Option<i64> {
 }
 
 impl Vault {
-    /// Universal search across notes, tasks and the usage history.
+    /// Universal search across pages, tasks and the usage history.
     pub fn search(&self, query: &str, apps: &[(String, String, u64)]) -> Vec<SearchHit> {
         let q = query.trim();
         if q.is_empty() {
@@ -480,27 +1166,24 @@ impl Vault {
         }
         let mut hits: Vec<SearchHit> = Vec::new();
 
-        for n in self.notes() {
-            let title_score = fuzzy_score(&n.title, q);
-            let body_score = fuzzy_score(&n.body, q).map(|s| s / 2);
-            let tag_score = n
-                .tags
-                .iter()
-                .filter_map(|t| fuzzy_score(t, q))
-                .max()
-                .map(|s| s - 10);
-            let best = [title_score, body_score, tag_score]
-                .into_iter()
-                .flatten()
-                .max();
+        for p in self.pages() {
+            if p.archived {
+                continue;
+            }
+            let text = page_text(&p);
+            let title_score = fuzzy_score(&p.title, q);
+            let body_score = fuzzy_score(&text, q).map(|s| s / 2);
+            let tag_score =
+                p.tags.iter().filter_map(|t| fuzzy_score(t, q)).max().map(|s| s - 10);
+            let best = [title_score, body_score, tag_score].into_iter().flatten().max();
             if let Some(score) = best {
                 hits.push(SearchHit {
-                    kind: "note".into(),
-                    id: n.id.clone(),
-                    title: if n.title.is_empty() { "Untitled note".into() } else { n.title.clone() },
-                    subtitle: preview(&n.body),
+                    kind: "page".into(),
+                    id: p.id.clone(),
+                    title: if p.title.is_empty() { "Untitled".into() } else { p.title.clone() },
+                    subtitle: preview(&text),
                     score,
-                    target: "notes".into(),
+                    target: p.id.clone(),
                 });
             }
         }
@@ -515,7 +1198,7 @@ impl Vault {
                     kind: "task".into(),
                     id: t.id.clone(),
                     title: t.title.clone(),
-                    subtitle: if t.done { "Completed task".into() } else { "Task".to_string() },
+                    subtitle: if t.status == "done" { "Completed task".into() } else { "Task".to_string() },
                     score: score + 5,
                     target: "tasks".into(),
                 });
@@ -523,7 +1206,7 @@ impl Vault {
         }
 
         for (key, name, ms) in apps.iter() {
-            if let Some(score) = fuzzy_score(&name, q).or_else(|| fuzzy_score(&key, q)) {
+            if let Some(score) = fuzzy_score(name, q).or_else(|| fuzzy_score(key, q)) {
                 hits.push(SearchHit {
                     kind: "app".into(),
                     id: key.clone(),
@@ -566,9 +1249,10 @@ fn preview(body: &str) -> String {
 }
 
 /// Tags in use, with counts — powers the tag filter chips.
-pub fn tag_index(notes: &[Note], tasks: &[Task]) -> BTreeMap<String, usize> {
+pub fn tag_index(pages: &[Page], tasks: &[Task]) -> BTreeMap<String, usize> {
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
-    for t in notes.iter().flat_map(|n| n.tags.iter()).chain(tasks.iter().flat_map(|t| t.tags.iter())) {
+    for t in pages.iter().flat_map(|p| p.tags.iter()).chain(tasks.iter().flat_map(|t| t.tags.iter()))
+    {
         *counts.entry(t.clone()).or_insert(0) += 1;
     }
     counts
@@ -620,37 +1304,233 @@ mod tests {
     }
 
     #[test]
-    fn notes_round_trip_through_disk() {
-        let v = temp_vault("notes");
-        let saved = v.save_note(Note {
+    fn pages_round_trip_through_disk() {
+        let v = temp_vault("pages");
+        let saved = v.save_page(Page {
             title: " Groceries ".into(),
-            body: "milk".into(),
+            blocks: vec![Block::new("todo", "milk"), Block::new("paragraph", "and eggs")],
             tags: vec!["Home".into(), "home".into(), " #food ".into()],
             ..Default::default()
         });
         assert_eq!(saved.title, "Groceries");
         assert_eq!(saved.tags, vec!["food", "home"], "tags normalize + dedupe");
         assert!(!saved.id.is_empty());
+        assert_eq!(saved.blocks[0].kind, "todo");
 
-        let reloaded = Vault::new(std::path::PathBuf::from(v.dir.clone()));
-        let notes = reloaded.notes();
-        assert_eq!(notes.len(), 1);
-        assert_eq!(notes[0].title, "Groceries");
+        let reloaded = Vault::new(v.dir.clone());
+        let pages = reloaded.pages();
+        assert_eq!(pages.len(), 1);
+        assert_eq!(pages[0].title, "Groceries");
+        assert_eq!(pages[0].blocks.len(), 2);
     }
 
     #[test]
-    fn tasks_toggle_and_clear() {
+    fn markdown_list_forms_parse_to_the_right_kinds() {
+        // `- [ ] item` is the form people actually write. Checking for the
+        // checkbox before stripping the list marker turned every one of them
+        // into a bullet, so the checked state was lost on migration.
+        assert_eq!(
+            list_item("- [ ] milk"),
+            Some(("todo", false, "milk".to_string()))
+        );
+        assert_eq!(
+            list_item("- [x] milk"),
+            Some(("todo", true, "milk".to_string()))
+        );
+        assert_eq!(
+            list_item("1. [ ] milk"),
+            Some(("todo", false, "milk".to_string()))
+        );
+        assert_eq!(
+            list_item("[ ] milk"),
+            Some(("todo", false, "milk".to_string()))
+        );
+        assert_eq!(
+            list_item("- milk"),
+            Some(("bulletedListItem", false, "milk".to_string()))
+        );
+        assert_eq!(
+            list_item("1. milk"),
+            Some(("numberedListItem", false, "milk".to_string()))
+        );
+        // Not list syntax at all.
+        assert_eq!(list_item("milk"), None);
+        assert_eq!(list_item("1 + 1"), None);
+    }
+
+    #[test]
+    fn legacy_notes_migrate_into_pages_with_blocks() {
+        let dir = std::env::temp_dir().join(format!(
+            "1boost-vault-migrate-{}-{}",
+            std::process::id(),
+            {
+                static N: AtomicU32 = AtomicU32::new(0);
+                N.fetch_add(1, Ordering::Relaxed)
+            }
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("notes.json"),
+            r#"[{"id":"n1","title":"Release","body":"# Heading\n- one\n- [ ] two\n> quoted\n```\ncode()\n```","tags":["work"],"pinned":true,"createdMs":10,"updatedMs":20}]"#,
+        )
+        .unwrap();
+
+        let v = Vault::new(dir.clone());
+        let pages = v.pages();
+        assert_eq!(pages.len(), 1, "the note became exactly one page");
+        let kinds: Vec<&str> = pages[0].blocks.iter().map(|b| b.kind.as_str()).collect();
+        assert_eq!(kinds, vec!["heading1", "bulletedListItem", "todo", "quote", "code"]);
+        assert_eq!(pages[0].blocks[4].text.trim(), "code()");
+        assert!(pages[0].favorite, "a pinned note stays a favourite page");
+        assert_eq!(pages[0].tags, vec!["work"]);
+
+        // The migrated file is written out, and notes.json is left alone.
+        assert!(dir.join("pages.json").exists());
+        assert!(dir.join("notes.json").exists());
+        // Reopening must not migrate a second time.
+        let again = Vault::new(dir);
+        assert_eq!(again.pages().len(), 1);
+    }
+
+    #[test]
+    fn unknown_block_kinds_degrade_instead_of_failing() {
+        let v = temp_vault("blocks");
+        let saved = v.save_page(Page {
+            title: "Future".into(),
+            blocks: vec![Block { kind: "mermaid".into(), text: "graph TD".into(), ..Default::default() }],
+            ..Default::default()
+        });
+        assert_eq!(saved.blocks[0].kind, "paragraph");
+        assert_eq!(saved.blocks[0].text, "graph TD", "the text is never dropped");
+    }
+
+    #[test]
+    fn pages_nest_and_deleting_one_takes_its_children() {
+        let v = temp_vault("tree");
+        let root = v.save_page(Page { title: "Project".into(), ..Default::default() });
+        let child = v.save_page(Page { title: "Notes".into(), parent_id: root.id.clone(), ..Default::default() });
+        let grandchild = v.save_page(Page {
+            title: "Deep".into(),
+            parent_id: child.id.clone(),
+            ..Default::default()
+        });
+        assert_eq!(v.pages().len(), 3);
+        assert!(v.delete_page(&root.id));
+        let left = v.pages();
+        assert_eq!(left.len(), 0, "children go with their parent");
+        assert_ne!(grandchild.id, "");
+    }
+
+    #[test]
+    fn a_page_cannot_be_moved_under_its_own_descendant() {
+        let v = temp_vault("cycle");
+        let root = v.save_page(Page { title: "Root".into(), ..Default::default() });
+        let child = v.save_page(Page { title: "Child".into(), parent_id: root.id.clone(), ..Default::default() });
+        // Move the root under its own child: refused, and the old parent kept.
+        let saved = v.save_page(Page { title: "Root".into(), parent_id: child.id.clone(), ..Default::default() });
+        assert_eq!(saved.parent_id, "");
+        assert_eq!(v.pages().iter().find(|p| p.id == root.id).unwrap().parent_id, "");
+    }
+
+    #[test]
+    fn deleting_a_page_keeps_its_tasks_but_drops_the_dangling_reference() {
+        let v = temp_vault("orphans");
+        let page = v.save_page(Page { title: "Plan".into(), ..Default::default() });
+        let task = v.save_task(Task {
+            title: "Draft it".into(),
+            page_id: page.id.clone(),
+            project_id: page.id.clone(),
+            ..Default::default()
+        });
+        assert!(v.delete_page(&page.id));
+        let tasks = v.tasks();
+        assert_eq!(tasks.len(), 1, "work is not thrown away with the page");
+        assert_eq!(tasks[0].id, task.id);
+        assert!(tasks[0].page_id.is_empty());
+        assert!(tasks[0].project_id.is_empty());
+    }
+
+    #[test]
+    fn tasks_toggle_clear_and_nest() {
         let v = temp_vault("tasks");
         let t = v.save_task(Task { title: "Ship 1.2.2".into(), priority: 2, ..Default::default() });
         assert!(!v.tasks()[0].done);
         let toggled = v.toggle_task(&t.id).unwrap();
         assert!(toggled.done);
+        assert_eq!(toggled.status, "done");
         assert!(toggled.completed_ms.is_some());
         // Re-saving a done task must not clear the completion stamp.
         let again = v.save_task(toggled.clone());
         assert!(again.completed_ms.is_some());
+        assert_eq!(again.status, "done");
+
+        let sub = v.save_task(Task { title: "Write notes".into(), parent_id: t.id.clone(), ..Default::default() });
+        assert_eq!(v.delete_task(&t.id), true, "the subtask goes with its parent");
+        assert!(v.tasks().is_empty());
+        assert_ne!(sub.id, "");
+
+        let a = v.save_task(Task { title: "one".into(), ..Default::default() });
+        assert_eq!(v.toggle_task(&a.id).unwrap().status, "done");
         assert_eq!(v.clear_done_tasks(), 1);
         assert!(v.tasks().is_empty());
+    }
+
+    #[test]
+    fn a_recurring_task_reschedules_instead_of_closing() {
+        let v = temp_vault("recurring");
+        let t = v.save_task(Task {
+            title: "Standup".into(),
+            recurrence: "weekly".into(),
+            due_ms: Some(now_ms()),
+            ..Default::default()
+        });
+        let done = v.toggle_task(&t.id).unwrap();
+        assert_eq!(done.status, "done");
+        assert!(done.due_ms.unwrap() > t.due_ms.unwrap(), "the due date moved forward");
+        // Reopening clears the completion stamp and leaves the new date alone.
+        let reopened = v.toggle_task(&t.id).unwrap();
+        assert_eq!(reopened.status, "todo");
+        assert!(reopened.completed_ms.is_none());
+    }
+
+    #[test]
+    fn legacy_done_flag_becomes_a_status() {
+        let dir = std::env::temp_dir().join(format!(
+            "1boost-vault-legacy-task-{}-{}",
+            std::process::id(),
+            {
+                static N: AtomicU32 = AtomicU32::new(0);
+                N.fetch_add(1, Ordering::Relaxed)
+            }
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("tasks.json"),
+            r#"[{"id":"t1","title":"Old","done":true,"priority":3,"tags":["x"],"createdMs":1,"updatedMs":2}]"#,
+        )
+        .unwrap();
+        let v = Vault::new(dir);
+        let tasks = v.tasks();
+        assert_eq!(tasks[0].status, "done");
+        assert!(tasks[0].done);
+        assert_eq!(tasks[0].priority, 3);
+    }
+
+    #[test]
+    fn blocked_by_is_cleaned_of_self_references() {
+        let v = temp_vault("relations");
+        let a = v.save_task(Task { title: "a".into(), ..Default::default() });
+        let b = v.save_task(Task {
+            title: "b".into(),
+            blocked_by: vec![a.id.clone(), a.id.clone(), String::new()],
+            ..Default::default()
+        });
+        assert_eq!(v.tasks().iter().find(|t| t.id == b.id).unwrap().blocked_by, vec![a.id]);
+        // Deleting the blocker removes it from the blocked task's list.
+        v.delete_task(&a.id);
+        assert!(v.tasks()[0].blocked_by.is_empty());
     }
 
     #[test]
@@ -680,22 +1560,30 @@ mod tests {
     }
 
     #[test]
-    fn search_finds_notes_tasks_and_apps() {
+    fn search_finds_pages_tasks_and_apps() {
         let v = temp_vault("search");
-        v.save_note(Note { title: "Rust release checklist".into(), body: "sign the key".into(), ..Default::default() });
+        v.save_page(Page { title: "Rust release checklist".into(), blocks: body_to_blocks("sign the key"), ..Default::default() });
         v.save_task(Task { title: "Reply to Sam".into(), ..Default::default() });
         let apps = vec![("brave".to_string(), "Brave".to_string(), 3_600_000)];
         // Every kind is reachable — the point of universal search.
         let hits = v.search("rel", &apps);
-        assert!(hits.iter().any(|h| h.kind == "note"), "notes are searchable");
+        assert!(hits.iter().any(|h| h.kind == "page"), "pages are searchable");
         assert!(hits.iter().any(|h| h.kind == "task"), "tasks are searchable");
         let app_hits = v.search("brave", &apps);
         assert!(app_hits.iter().any(|h| h.kind == "app" && h.title == "Brave"));
-        // A unique phrase puts its note on top.
+        // A unique phrase puts its page on top.
         let exact = v.search("checklist", &apps);
-        assert_eq!(exact[0].kind, "note");
+        assert_eq!(exact[0].kind, "page");
         assert!(v.search("zzzz", &apps).is_empty());
         assert!(v.search("   ", &apps).is_empty());
+    }
+
+    #[test]
+    fn archived_pages_stay_out_of_search() {
+        let v = temp_vault("archived");
+        v.save_page(Page { title: "Old roadmap".into(), archived: true, ..Default::default() });
+        assert!(v.search("roadmap", &[]).is_empty());
+        assert_eq!(v.pages().len(), 1, "but it is still on disk and listed");
     }
 
     #[test]
@@ -710,5 +1598,12 @@ mod tests {
         assert!(fuzzy_score("abc", "abcd").is_none(), "needle longer than haystack");
         assert!(fuzzy_score("abc", "xyz").is_none(), "letters that do not appear");
         assert_eq!(fuzzy_score("anything", ""), Some(1), "empty query matches everything");
+    }
+
+    #[test]
+    fn table_rows_survive_the_flat_storage_format() {
+        let rows = vec![vec!["a".to_string(), "b".to_string()], vec!["1".to_string(), "2".to_string()]];
+        assert_eq!(parse_table_rows(&join_table_rows(&rows)), rows);
+        assert!(parse_table_rows("").is_empty());
     }
 }

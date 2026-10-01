@@ -1,307 +1,536 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  NotebookPen,
-  Pin,
-  PinOff,
+  ChevronRight,
+  CornerDownLeft,
+  FileText,
+  Link2,
+  Plus,
   Search,
+  Star,
   Trash2,
-  Tag,
   X,
-  Check,
 } from 'lucide-react'
-import type { Note } from '../../shared/types'
-import { bridge } from '../bridge'
+import type { Block, Page } from '../../shared/types'
+import BlockEditor from '../components/BlockEditor'
+import { EmptyState, ErrorState } from '../components/ui'
 import { useFocusTarget } from '../nav'
-import { EmptyState } from '../components/ui'
+import {
+  backlinksTo,
+  breadcrumbsOf,
+  childrenOf,
+  tasksOfPage,
+  useWorkspace,
+} from '../workspace/store'
+import { makeBlock } from '../workspace/blocks'
 
-function relative(ts: number): string {
-  if (!ts) return ''
-  const diff = Date.now() - ts
-  const min = Math.round(diff / 60000)
-  if (min < 1) return 'just now'
-  if (min < 60) return `${min}m ago`
-  const h = Math.round(min / 60)
-  if (h < 24) return `${h}h ago`
-  const d = Math.round(h / 24)
-  if (d < 7) return `${d}d ago`
-  return new Date(ts).toLocaleDateString()
-}
+/** Debounce before an autosave. Long enough to coalesce a typing burst, short
+ *  enough that a note is never meaningfully at risk. */
+const AUTOSAVE_MS = 700
 
-const emptyDraft = (): Note => ({
-  id: '',
-  title: '',
-  body: '',
-  tags: [],
-  pinned: false,
-  createdMs: 0,
-  updatedMs: 0,
-})
+type Pane = 'tree' | 'recent' | 'search'
 
+/**
+ * Pages — the writing and thinking half of the workspace.
+ *
+ * Layout is three columns on a wide window (tree, editor, context) and
+ * collapses to two then one, so the same component works in a 1040px window
+ * and a maximized one.
+ */
 export default function NotesPage() {
-  const [notes, setNotes] = useState<Note[] | null>(null)
-  const [selected, setSelected] = useState<Note>(emptyDraft())
-  const [dirty, setDirty] = useState(false)
+  const { pages, tasks, loading, error, savePage, deletePage, toggleTask } = useWorkspace()
+  const [openId, setOpenId] = useState('')
+  const [pane, setPane] = useState<Pane>('tree')
   const [query, setQuery] = useState('')
-  const [tag, setTag] = useState<string | null>(null)
-  const [tagInput, setTagInput] = useState('')
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'failed'>('idle')
   const { focus, clearFocus } = useFocusTarget()
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** The page being edited. Edits live here so typing never waits on a round
+   *  trip; the backend copy is reconciled after each autosave. */
+  const [draft, setDraft] = useState<Page | null>(null)
 
-  const load = useCallback(async () => {
-    try {
-      const list = await bridge.notesList()
-      setNotes(list)
-      // Nothing open yet: start on the first note, or a fresh draft.
-      if (list.length > 0) setSelected((cur) => (cur.id ? cur : list[0]))
-    } catch {
-      setNotes([])
+  const pageList = useMemo(() => pages ?? [], [pages])
+  const taskList = useMemo(() => tasks ?? [], [tasks])
+
+  // Open the first page once the list arrives, unless one is already open.
+  useEffect(() => {
+    if (openId || pageList.length === 0) return
+    setOpenId(pageList[0].id)
+  }, [openId, pageList])
+
+  // Adopt the backend's copy whenever the open page changes identity or is
+  // replaced by a save from elsewhere (palette deep link, quick capture).
+  useEffect(() => {
+    if (!openId) {
+      setDraft(null)
+      return
     }
-  }, [])
+    const found = pageList.find((p) => p.id === openId)
+    setDraft(found ?? null)
+  }, [openId, pageList])
 
+  // A search hit from the palette opens that page directly.
   useEffect(() => {
-    void load()
-  }, [load])
-
-  // A search hit from the palette opens that note directly.
-  useEffect(() => {
-    if (!focus?.noteId) return
-    const found = notes?.find((n) => n.id === focus.noteId)
-    if (found) {
-      setSelected(found)
-      setDirty(false)
+    if (!focus?.pageId) return
+    if (pageList.some((p) => p.id === focus.pageId)) {
+      setOpenId(focus.pageId)
+      setPane('tree')
     }
     clearFocus()
-  }, [focus, notes, clearFocus])
+  }, [focus, pageList, clearFocus])
 
-  const tags = useMemo(() => {
-    const counts = new Map<string, number>()
-    for (const n of notes ?? []) for (const t of n.tags) counts.set(t, (counts.get(t) ?? 0) + 1)
-    return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-  }, [notes])
+  const persist = useCallback(
+    (page: Page) => {
+      if (saveTimer.current) clearTimeout(saveTimer.current)
+      saveTimer.current = setTimeout(() => {
+        setSaveState('saving')
+        savePage(page)
+          .then(() => setSaveState('saved'))
+          .catch(() => setSaveState('failed'))
+      }, AUTOSAVE_MS)
+    },
+    [savePage],
+  )
 
-  const visible = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    return (notes ?? []).filter((n) => {
-      if (tag && !n.tags.includes(tag)) return false
-      if (!q) return true
-      return (
-        n.title.toLowerCase().includes(q) ||
-        n.body.toLowerCase().includes(q) ||
-        n.tags.some((t) => t.includes(q))
-      )
-    })
-  }, [notes, query, tag])
-
-  const save = async () => {
-    const saved = await bridge.noteSave(selected)
-    setSelected(saved)
-    setDirty(false)
-    await load()
-  }
-
-  const newNote = () => {
-    setSelected(emptyDraft())
-    setDirty(false)
-  }
-
-  const remove = async (id: string) => {
-    await bridge.noteDelete(id)
-    const next = (notes ?? []).find((n) => n.id !== id)
-    if (selected.id === id) setSelected(next ?? emptyDraft())
-    await load()
-  }
-
-  const togglePin = async () => {
-    const next = { ...selected, pinned: !selected.pinned }
-    setSelected(next)
-    setDirty(true)
-    if (next.id) await bridge.noteSave(next).then((saved) => setSelected(saved))
-    await load()
-  }
-
-  const addTag = () => {
-    const t = tagInput.trim().replace(/^#/, '').toLowerCase()
-    if (!t || selected.tags.includes(t)) return setTagInput('')
-    setSelected({ ...selected, tags: [...selected.tags, t].sort() })
-    setTagInput('')
-    setDirty(true)
-  }
-
-  const removeTag = (t: string) => {
-    setSelected({ ...selected, tags: selected.tags.filter((x) => x !== t) })
-    setDirty(true)
-  }
-
-  // Ctrl+S saves, matching every other editor on the planet.
+  // Ctrl+S flushes immediately, matching every other editor on the planet.
   useEffect(() => {
+    if (!draft) return
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
         e.preventDefault()
-        if (dirty) void save()
+        if (saveTimer.current) clearTimeout(saveTimer.current)
+        setSaveState('saving')
+        savePage(draft)
+          .then(() => setSaveState('saved'))
+          .catch(() => setSaveState('failed'))
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  })
+  }, [draft, savePage])
 
-  if (notes && notes.length === 0 && !selected.title) {
+  const edit = useCallback(
+    (patch: Partial<Page>) => {
+      setDraft((cur) => {
+        if (!cur) return cur
+        const next = { ...cur, ...patch }
+        persist(next)
+        return next
+      })
+    },
+    [persist],
+  )
+
+  const onBlocks = useCallback(
+    (blocks: Block[]) => {
+      edit({ blocks })
+    },
+    [edit],
+  )
+
+  const createPage = useCallback(
+    async (parentId = '') => {
+      const page: Page = {
+        id: '',
+        title: '',
+        icon: '',
+        parentId,
+        blocks: [makeBlock('paragraph')],
+        tags: [],
+        favorite: false,
+        archived: false,
+        createdMs: 0,
+        updatedMs: 0,
+      }
+      const saved = await savePage(page)
+      setOpenId(saved.id)
+      setPane('tree')
+    },
+    [savePage],
+  )
+
+  const remove = useCallback(async () => {
+    if (!draft) return
+    const id = draft.id
+    await deletePage(id)
+    setOpenId('')
+    setDraft(null)
+  }, [draft, deletePage])
+
+  const toggleFavorite = useCallback(() => {
+    if (!draft) return
+    edit({ favorite: !draft.favorite })
+  }, [draft, edit])
+
+  const crumbs = useMemo(() => breadcrumbsOf(pageList, openId), [pageList, openId])
+  const backlinks = useMemo(
+    () => (draft ? backlinksTo(pageList, taskList, draft.id) : []),
+    [pageList, taskList, draft],
+  )
+  const pageTasks = useMemo(
+    () => (draft ? tasksOfPage(taskList, draft.id) : []),
+    [taskList, draft],
+  )
+
+  const recents = useMemo(
+    () =>
+      pageList
+        .filter((p) => !p.archived && p.updatedMs > 0)
+        .sort((a, b) => b.updatedMs - a.updatedMs)
+        .slice(0, 8),
+    [pageList],
+  )
+
+  const searchResults = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q) return []
+    return pageList
+      .filter((p) => !p.archived && (p.title.toLowerCase().includes(q) || p.tags.some((t) => t.includes(q))))
+      .slice(0, 40)
+  }, [pageList, query])
+
+  const favourites = useMemo(() => pageList.filter((p) => p.favorite && !p.archived), [pageList])
+
+  if (error && !pages) {
     return (
       <div className="page">
-        <h1 className="page-title">Notes</h1>
-        <p className="page-subtitle">Scratchpads, lists and anything worth keeping</p>
-        <div className="card" style={{ marginTop: 16 }}>
-          <EmptyState
-            icon={<NotebookPen size={24} />}
-            title="No notes yet"
-            desc="Press Ctrl+Shift+Space anywhere to capture one without leaving what you were doing."
-          />
-        </div>
+        <ErrorState title="The workspace could not be loaded" desc={error} onRetry={() => window.location.reload()} />
+      </div>
+    )
+  }
+
+  if (loading && !pages) {
+    return (
+      <div className="page">
+        <div className="module-loading">Loading your pages…</div>
       </div>
     )
   }
 
   return (
-    <div className="page notes-page">
-      <div className="notes-head">
+    <div className="page workspace-page">
+      <div className="workspace-head">
         <div>
-          <h1 className="page-title">Notes</h1>
+          <h1 className="page-title">Pages</h1>
           <p className="page-subtitle">
-            {visible.length} of {notes?.length ?? 0} notes
+            {pageList.length} pages · {taskList.filter((t) => t.status !== 'done').length} open tasks
           </p>
         </div>
-        <div className="notes-head-actions">
+        <div className="workspace-head-actions">
           <div className="search-box">
             <Search size={15} />
             <input
               value={query}
-              placeholder="Filter notes…"
-              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Find a page…"
+              onChange={(e) => {
+                setQuery(e.target.value)
+                setPane(e.target.value ? 'search' : 'tree')
+              }}
               spellCheck={false}
             />
             {query ? (
-              <button aria-label="Clear" onClick={() => setQuery('')}>
+              <button aria-label="Clear search" onClick={() => setQuery('')}>
                 <X size={13} />
               </button>
             ) : null}
           </div>
-          <button className="btn btn-primary" onClick={newNote}>
-            <NotebookPen size={15} /> New
+          <button className="btn btn-primary" onClick={() => void createPage('')}>
+            <Plus size={15} /> New page
           </button>
         </div>
       </div>
 
-      {tags.length > 0 ? (
-        <div className="chip-row">
-          <button className={`chip${tag === null ? ' active' : ''}`} onClick={() => setTag(null)}>
-            All
-          </button>
-          {tags.map(([t, count]) => (
-            <button key={t} className={`chip${tag === t ? ' active' : ''}`} onClick={() => setTag(t)}>
-              <Tag size={12} /> {t} <span className="chip-count">{count}</span>
-            </button>
-          ))}
-        </div>
-      ) : null}
-
-      <div className="notes-split">
-        <div className="notes-list card">
-          {visible.length === 0 ? (
-            <div className="notes-empty">No notes match this filter.</div>
-          ) : (
-            visible.map((n) => (
-              <button
-                key={n.id}
-                className={`note-row${selected.id === n.id ? ' active' : ''}`}
-                onClick={() => {
-                  setSelected(n)
-                  setDirty(false)
-                }}
-              >
-                <div className="note-row-head">
-                  <span className="note-row-title">{n.title || 'Untitled'}</span>
-                  {n.pinned ? <Pin size={12} className="note-pin" /> : null}
-                </div>
-                <div className="note-row-meta">
-                  {relative(n.updatedMs)}
-                  {n.tags.length ? ` · ${n.tags.join(' ')}` : ''}
-                </div>
+      {pageList.length === 0 ? (
+        <div className="card" style={{ marginTop: 16 }}>
+          <EmptyState
+            icon={<FileText size={24} />}
+            title="No pages yet"
+            desc="A page holds blocks — headings, lists, to-dos, code and tasks. Create one, or press Ctrl+Shift+Space and start with “>” to capture without leaving what you were doing."
+            action={
+              <button className="btn btn-primary" onClick={() => void createPage('')}>
+                <Plus size={15} /> New page
               </button>
-            ))
-          )}
-        </div>
-
-        <div className="note-editor card">
-          <div className="note-editor-bar">
-            <input
-              className="note-title-input"
-              value={selected.title}
-              placeholder="Title"
-              onChange={(e) => {
-                setSelected({ ...selected, title: e.target.value })
-                setDirty(true)
-              }}
-            />
-            <div className="note-editor-actions">
-              <button
-                className="btn btn-ghost"
-                onClick={togglePin}
-                title={selected.pinned ? 'Unpin' : 'Pin'}
-                aria-label={selected.pinned ? 'Unpin' : 'Pin'}
-              >
-                {selected.pinned ? <PinOff size={16} /> : <Pin size={16} />}
-              </button>
-              <button
-                className="btn btn-ghost"
-                onClick={() => void remove(selected.id)}
-                disabled={!selected.id}
-                title="Delete"
-                aria-label="Delete note"
-              >
-                <Trash2 size={16} />
-              </button>
-              <button className="btn btn-primary" onClick={() => void save()} disabled={!dirty}>
-                <Check size={15} /> {dirty ? 'Save' : 'Saved'}
-              </button>
-            </div>
-          </div>
-
-          <textarea
-            className="note-body"
-            value={selected.body}
-            placeholder="Write anything…"
-            onChange={(e) => {
-              setSelected({ ...selected, body: e.target.value })
-              setDirty(true)
-            }}
-            spellCheck
+            }
           />
-
-          <div className="note-tags">
-            {selected.tags.map((t) => (
-              <span key={t} className="tag-pill">
-                {t}
-                <button aria-label={`Remove tag ${t}`} onClick={() => removeTag(t)}>
-                  <X size={11} />
-                </button>
-              </span>
-            ))}
-            <input
-              className="tag-input"
-              value={tagInput}
-              placeholder="+ tag"
-              onChange={(e) => setTagInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ',') {
-                  e.preventDefault()
-                  addTag()
-                } else if (e.key === 'Backspace' && !tagInput && selected.tags.length) {
-                  removeTag(selected.tags[selected.tags.length - 1])
-                }
-              }}
-              onBlur={addTag}
-            />
-          </div>
         </div>
-      </div>
+      ) : (
+        <div className="workspace-split">
+          <aside className="tree-pane card">
+            <div className="segmented tree-tabs" role="tablist">
+              {(['tree', 'recent'] as Pane[]).map((p) => (
+                <button
+                  key={p}
+                  role="tab"
+                  aria-selected={pane === p}
+                  className={pane === p ? 'active' : ''}
+                  onClick={() => setPane(p)}
+                >
+                  {p === 'tree' ? 'All' : 'Recent'}
+                </button>
+              ))}
+            </div>
+
+            {pane === 'search' ? (
+              <div className="tree-list">
+                {searchResults.length === 0 ? (
+                  <div className="tree-empty">No page matches “{query}”.</div>
+                ) : (
+                  searchResults.map((p) => (
+                    <TreeRow key={p.id} page={p} depth={0} active={p.id === openId} onOpen={setOpenId} onCreate={createPage} />
+                  ))
+                )}
+              </div>
+            ) : pane === 'recent' ? (
+              <div className="tree-list">
+                {recents.length === 0 ? (
+                  <div className="tree-empty">Nothing edited yet.</div>
+                ) : (
+                  recents.map((p) => (
+                    <TreeRow key={p.id} page={p} depth={0} active={p.id === openId} onOpen={setOpenId} onCreate={createPage} />
+                  ))
+                )}
+              </div>
+            ) : (
+              <div className="tree-list">
+                {favourites.length > 0 ? (
+                  <>
+                    <div className="tree-heading">
+                      <Star size={12} /> Favourites
+                    </div>
+                    {favourites.map((p) => (
+                      <TreeRow key={p.id} page={p} depth={0} active={p.id === openId} onOpen={setOpenId} onCreate={createPage} />
+                    ))}
+                    <div className="tree-heading">All pages</div>
+                  </>
+                ) : null}
+                <TreeChildren
+                  pages={pageList}
+                  parentId=""
+                  depth={0}
+                  openId={openId}
+                  onOpen={setOpenId}
+                  onCreate={createPage}
+                />
+              </div>
+            )}
+          </aside>
+
+          <section className="page-editor card">
+            {draft ? (
+              <>
+                <nav className="crumbs" aria-label="Breadcrumbs">
+                  {crumbs.map((c, i) => (
+                    <span key={c.id}>
+                      {i > 0 ? <ChevronRight size={12} className="crumb-sep" /> : null}
+                      <button className="crumb" onClick={() => setOpenId(c.id)}>
+                        {c.icon ? `${c.icon} ` : ''}
+                        {c.title || 'Untitled'}
+                      </button>
+                    </span>
+                  ))}
+                </nav>
+
+                <div className="page-editor-bar">
+                  <input
+                    className="page-icon-input"
+                    value={draft.icon}
+                    placeholder="📄"
+                    maxLength={8}
+                    aria-label="Page icon"
+                    onChange={(e) => edit({ icon: e.target.value })}
+                  />
+                  <input
+                    className="page-title-input selectable"
+                    value={draft.title}
+                    placeholder="Untitled"
+                    aria-label="Page title"
+                    onChange={(e) => edit({ title: e.target.value })}
+                  />
+                  <div className="page-editor-actions">
+                    <span className={`save-state ${saveState}`}>
+                      {saveState === 'saving'
+                        ? 'Saving…'
+                        : saveState === 'saved'
+                          ? 'Saved'
+                          : saveState === 'failed'
+                            ? 'Not saved'
+                            : ''}
+                    </span>
+                    <button
+                      className={`btn btn-ghost${draft.favorite ? ' on' : ''}`}
+                      onClick={toggleFavorite}
+                      title={draft.favorite ? 'Remove from favourites' : 'Add to favourites'}
+                      aria-label={draft.favorite ? 'Remove from favourites' : 'Add to favourites'}
+                    >
+                      <Star size={16} fill={draft.favorite ? 'currentColor' : 'none'} />
+                    </button>
+                    <button className="btn btn-ghost" onClick={() => void remove()} title="Delete page" aria-label="Delete page">
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                </div>
+
+                {draft.parentId ? null : (
+                  <button
+                    className="btn btn-ghost subpage-btn"
+                    onClick={() => void createPage(draft.id)}
+                    title="Create a page nested under this one"
+                  >
+                    <Plus size={14} /> Sub-page
+                  </button>
+                )}
+
+                <BlockEditor
+                  blocks={draft.blocks}
+                  onChange={onBlocks}
+                  pages={pageList}
+                  tasks={taskList}
+                  onToggleTask={(id) => void toggleTask(id)}
+                />
+
+                <div className="page-context">
+                  <div className="context-col">
+                    <div className="section-title">Tasks on this page</div>
+                    {pageTasks.length === 0 ? (
+                      <div className="context-empty">
+                        Type <kbd>/</kbd> and pick <b>Task</b> to pull one in, or add one from Tasks.
+                      </div>
+                    ) : (
+                      <div className="row-list">
+                        {pageTasks.slice(0, 8).map((t) => (
+                          <label key={t.id} className={`task-row mini${t.status === 'done' ? ' done' : ''}`}>
+                            <input
+                              type="checkbox"
+                              checked={t.status === 'done'}
+                              onChange={() => void toggleTask(t.id)}
+                              aria-label={t.status === 'done' ? `Reopen ${t.title}` : `Complete ${t.title}`}
+                            />
+                            <span className="task-title">{t.title}</span>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div className="context-col">
+                    <div className="section-title">
+                      <Link2 size={13} /> Backlinks
+                    </div>
+                    {backlinks.length === 0 ? (
+                      <div className="context-empty">
+                        No other page points here yet. Type <kbd>/</kbd> and pick <b>Page</b> to link.
+                      </div>
+                    ) : (
+                      backlinks.map((b) => (
+                        <button key={b.id} className="context-link" onClick={() => setOpenId(b.id)}>
+                          <CornerDownLeft size={12} />
+                          <span>{b.icon ? `${b.icon} ` : ''}{b.title || 'Untitled'}</span>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </>
+            ) : (
+              <EmptyState
+                icon={<FileText size={24} />}
+                title="Select a page"
+                desc="Pick one from the list, or create a new page to start writing."
+                action={
+                  <button className="btn btn-primary" onClick={() => void createPage('')}>
+                    <Plus size={15} /> New page
+                  </button>
+                }
+              />
+            )}
+          </section>
+        </div>
+      )}
     </div>
   )
 }
+
+/** One row in the page tree. */
+function TreeRow({
+  page,
+  depth,
+  active,
+  onOpen,
+  onCreate,
+}: {
+  page: Page
+  depth: number
+  active: boolean
+  onOpen: (id: string) => void
+  onCreate: (parentId: string) => Promise<void>
+}) {
+  return (
+    <button
+      className={`tree-row${active ? ' active' : ''}`}
+      style={{ ['--depth' as string]: depth }}
+      onClick={() => onOpen(page.id)}
+      aria-current={active ? 'page' : undefined}
+      title={page.title || 'Untitled'}
+    >
+      <span className="tree-icon">{page.icon || '·'}</span>
+      <span className="tree-title">{page.title || 'Untitled'}</span>
+      <span
+        className="tree-add"
+        role="button"
+        tabIndex={0}
+        title="Add a sub-page"
+        onClick={(e) => {
+          e.stopPropagation()
+          void onCreate(page.id)
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            e.stopPropagation()
+            void onCreate(page.id)
+          }
+        }}
+      >
+        <Plus size={12} />
+      </span>
+    </button>
+  )
+}
+
+/** Renders a page and everything nested beneath it, recursively. */
+function TreeChildren({
+  pages,
+  parentId,
+  depth,
+  openId,
+  onOpen,
+  onCreate,
+}: {
+  pages: Page[]
+  parentId: string
+  depth: number
+  openId: string
+  onOpen: (id: string) => void
+  onCreate: (parentId: string) => Promise<void>
+}) {
+  const children = childrenOf(pages, parentId)
+  if (children.length === 0) {
+    return depth === 0 ? <div className="tree-empty">No pages here yet.</div> : null
+  }
+  return (
+    <>
+      {children.map((child) => (
+        <div key={child.id}>
+          <TreeRow page={child} depth={depth} active={child.id === openId} onOpen={onOpen} onCreate={onCreate} />
+          <TreeChildren
+            pages={pages}
+            parentId={child.id}
+            depth={depth + 1}
+            openId={openId}
+            onOpen={onOpen}
+            onCreate={onCreate}
+          />
+        </div>
+      ))}
+    </>
+  )
+}
+

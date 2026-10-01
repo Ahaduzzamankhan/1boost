@@ -416,8 +416,6 @@ export function clampPrefs(p: Partial<Prefs> | null | undefined, defaults: Prefs
   if (!p) return out
   const themes: Prefs['theme'][] = ['dark-glass', 'white-glass', 'solid-dark', 'solid-white', 'amoled']
   if (themes.includes(p.theme as Prefs['theme'])) out.theme = p.theme as Prefs['theme']
-  const accents: Prefs['accent'][] = ['blue', 'violet', 'teal', 'green', 'amber', 'rose', 'sky', 'crimson']
-  if (accents.includes(p.accent as Prefs['accent'])) out.accent = p.accent as Prefs['accent']
   if (typeof p.transparency === 'number' && Number.isFinite(p.transparency)) {
     out.transparency = Math.min(1, Math.max(0, p.transparency))
   }
@@ -432,6 +430,9 @@ export function clampPrefs(p: Partial<Prefs> | null | undefined, defaults: Prefs
     out.keepHistoryDays = Math.min(3650, Math.max(7, Math.round(p.keepHistoryDays)))
   }
   out.showTray = typeof p.showTray === 'boolean' ? p.showTray : out.showTray
+  // The customization layer is capped here too, so the legacy clamp and the
+  // Rust one agree about what a legal settings file looks like.
+  out.customCss = typeof p.customCss === 'string' ? p.customCss.slice(0, 64 * 1024) : out.customCss
   return out
 }
 
@@ -443,7 +444,6 @@ export function clampPrefs(p: Partial<Prefs> | null | undefined, defaults: Prefs
  * the Rust backend agree on the initial preference set. */
 export const DEFAULT_PREFS: Prefs = {
   theme: 'dark-glass',
-  accent: 'blue',
   transparency: 0.4,
   reducedMotion: false,
   launchAtLogin: false,
@@ -452,8 +452,8 @@ export const DEFAULT_PREFS: Prefs = {
   idleThresholdMin: 1,
   keepHistoryDays: 365,
   showTray: true,
-  // The experimental assistant is opt-in, never on by default.
-  experimentalAi: false,
+  // No customization by default; the default UI is meant to stand on its own.
+  customCss: '',
 }
 
 const DATA_VERSION = 1

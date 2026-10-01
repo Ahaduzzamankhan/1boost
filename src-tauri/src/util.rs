@@ -79,6 +79,44 @@ pub fn shift_day_key(key: &str, days: i64) -> Option<String> {
     Some(day_key_from_ymd(y, m, d))
 }
 
+/// Local weekday (0 = Sunday) of an epoch-ms instant.
+pub fn local_weekday(ms: u64) -> u32 {
+    weekday_of_key(&day_key(ms))
+}
+
+/// Add calendar months to an epoch-ms instant, in local time.
+///
+/// Month arithmetic cannot be done in milliseconds: "the 31st" has no
+/// February, so clamping to the last day of the target month is the only
+/// sensible answer, and adding 86_400_000 * 30 would drift a recurring task
+/// by a day every time it rolled over.
+pub fn add_local_month(ms: u64, months: i64) -> u64 {
+    let day = day_key(ms);
+    let Some(secs) = parse_day_key(&day) else { return ms };
+    let days = secs.div_euclid(86_400);
+    let (y, m, d) = civil_from_days(days);
+    // Zero-based month so negative months work as subtraction.
+    let total = (y * 12 + (m - 1)) + months;
+    let ny = total.div_euclid(12);
+    let nm = total.rem_euclid(12) + 1;
+    let last = days_in_month(ny, nm);
+    let nd = d.min(last);
+    let next = days_from_civil(ny, nm, nd) * 86_400;
+    // Keep the instant's time-of-day; only the date moves.
+    let time_of_day = ms - days.saturating_mul(86_400) * 1000;
+    (next * 1000).saturating_add(time_of_day)
+}
+
+fn days_in_month(y: i64, m: i64) -> i64 {
+    match m {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 => 29,
+        2 => 28,
+        _ => 30,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Local timezone offset
 // ---------------------------------------------------------------------------
@@ -238,6 +276,31 @@ mod tests {
         // Each shift must advance the weekday by exactly one.
         let key = shift_day_key("2026-09-28", 100).unwrap();
         assert_eq!(weekday_of_key(&key), (weekday_of_key("2026-09-28") + 100) % 7);
+    }
+
+    #[test]
+    fn month_arithmetic_clamps_to_the_end_of_a_short_month() {
+        // 2026-01-31 + 1 month has no 31st, so it lands on the 28th.
+        let jan31 = days_from_civil(2026, 1, 31) * 86_400 * 1000;
+        assert_eq!(day_key(add_local_month(jan31, 1)), "2026-02-28");
+        // Forward and backward across a year boundary.
+        let dec = days_from_civil(2026, 12, 15) * 86_400 * 1000;
+        assert_eq!(day_key(add_local_month(dec, 1)), "2027-01-15");
+        assert_eq!(day_key(add_local_month(dec, -12)), "2025-12-15");
+        // A leap year still gets its 29th.
+        let jan = days_from_civil(2028, 1, 31) * 86_400 * 1000;
+        assert_eq!(day_key(add_local_month(jan, 1)), "2028-02-29");
+        // The time of day survives the move.
+        let with_time = jan + 13 * 3_600_000 + 45 * 60_000;
+        let moved = add_local_month(with_time, 1);
+        assert_eq!(moved - days_from_civil(2028, 2, 29) * 86_400 * 1000, 13 * 3_600_000 + 45 * 60_000);
+    }
+
+    #[test]
+    fn local_weekday_matches_the_day_key() {
+        let monday = days_from_civil(2026, 9, 28) * 86_400 * 1000;
+        assert_eq!(local_weekday(monday), 1);
+        assert_eq!(local_weekday(monday + 6 * 86_400_000), 0, "the next Sunday");
     }
 
     #[test]

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { DashboardData, LiveSnapshot, PageId, Prefs, ToastMsg } from '../shared/types'
-import { bridge, accentHex } from './bridge'
+import { bridge } from './bridge'
+import { useCustomCss } from './customCss'
 
 export interface InitialPayload {
   prefs: Prefs
@@ -52,8 +53,20 @@ export function useAppInit() {
   return { initial, prefs, setPref, loading, toasts }
 }
 
-/** Applies theme + accent + transparency + motion to the document root. */
+/**
+ * Applies theme + transparency + motion to the document root.
+ *
+ * The accent tokens are deliberately *not* set from JS: they are defined in
+ * the stylesheet per theme, so the palette is grayscale by construction and a
+ * user's custom CSS can override them without a re-render.
+ */
 export function useThemeEffects(prefs: Prefs | null): void {
+  useTheme(prefs)
+  useCustomCss(prefs?.customCss ?? '')
+}
+
+/** Theme class, motion preference and window transparency. */
+export function useTheme(prefs: Prefs | null): void {
   useEffect(() => {
     if (!prefs) return
     const root = document.documentElement
@@ -62,28 +75,16 @@ export function useThemeEffects(prefs: Prefs | null): void {
     root.dataset.glass = glassy ? '1' : '0'
     root.dataset.reducedMotion = prefs.reducedMotion ? 'true' : 'false'
     // Tell the main process which window class (opaque vs transparent) the
-    // theme needs, so it can rebuild the window when the class flips.
+    // theme needs, so it can repaint the existing window when the class flips.
     void bridge.notifyThemeClass(glassy).catch(() => undefined)
-    const hex = accentHex(prefs.accent)
-    root.style.setProperty('--accent', hex)
-    root.style.setProperty('--accent-strong', shade(hex, -18))
-    root.style.setProperty('--accent-soft', withAlpha(hex, 0.16 * (1.2 - prefs.transparency * 0.6)))
     root.style.setProperty('--blur', `${Math.round(10 + (1 - prefs.transparency) * 18)}px`)
-    const surfaces = getComputedStyle(root)
-    const bg = surfaces.getPropertyValue('--bg').trim()
+    const bg = getComputedStyle(root).getPropertyValue('--bg').trim()
     if (glassy && bg) {
       root.style.setProperty('--backdrop', withAlphaCss(bg, Math.min(0.85, 0.25 + prefs.transparency * 0.6)))
     } else {
       root.style.setProperty('--backdrop', bg)
     }
   }, [prefs])
-}
-
-function withAlpha(hex: string, alpha: number): string {
-  const r = parseInt(hex.slice(1, 3), 16)
-  const g = parseInt(hex.slice(3, 5), 16)
-  const b = parseInt(hex.slice(5, 7), 16)
-  return `rgba(${r}, ${g}, ${b}, ${Math.max(0, Math.min(1, alpha))})`
 }
 
 function withAlphaCss(color: string, alpha: number): string {
@@ -94,17 +95,6 @@ function withAlphaCss(color: string, alpha: number): string {
     return `rgba(${r}, ${g}, ${b}, ${Math.max(0, Math.min(1, alpha))})`
   }
   return color
-}
-
-function shade(hex: string, percent: number): string {
-  const f = parseInt(hex.slice(1), 16)
-  const t = percent < 0 ? 0 : 255
-  const p = Math.abs(percent) / 100
-  const r = (f >> 16) & 0xff
-  const g = (f >> 8) & 0xff
-  const b = f & 0xff
-  const to = (c: number) => Math.round((t - c) * p) + c
-  return `#${((1 << 24) + (to(r) << 16) + (to(g) << 8) + to(b)).toString(16).slice(1)}`
 }
 
 export function useDashboard(initialDashboard: DashboardData | null) {

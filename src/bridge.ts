@@ -1,4 +1,4 @@
-import type { AiAnswer, AiStatus, Bridge, PageId, Prefs } from '../shared/types'
+import type { Bridge, PageId, Prefs } from '../shared/types'
 
 /**
  * Browser-harness only: matches package.json so About/Updates never lie.
@@ -10,29 +10,6 @@ declare global {
     oneboost?: Bridge
     __TAURI_INTERNALS__?: unknown
   }
-}
-
-export const ACCENT_HEX: Record<Prefs['accent'], string> = {
-  blue: '#3b82f6',
-  violet: '#8b5cf6',
-  teal: '#14b8a6',
-  green: '#22c55e',
-  amber: '#f59e0b',
-  rose: '#f43f5e',
-  sky: '#0ea5e9',
-  crimson: '#dc2626',
-}
-
-export function accentHex(a: Prefs['accent']): string {
-  return ACCENT_HEX[a] ?? ACCENT_HEX.blue
-}
-
-export function accentRgba(a: Prefs['accent'], alpha: number): string {
-  const hex = accentHex(a)
-  const r = parseInt(hex.slice(1, 3), 16)
-  const g = parseInt(hex.slice(3, 5), 16)
-  const b = parseInt(hex.slice(5, 7), 16)
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`
 }
 
 /**
@@ -95,7 +72,6 @@ function createBrowserHarnessBridge(): Bridge {
   }
   const prefs: Prefs = {
     theme: 'dark-glass',
-    accent: 'blue',
     transparency: 0.4,
     reducedMotion: false,
     launchAtLogin: false,
@@ -104,15 +80,7 @@ function createBrowserHarnessBridge(): Bridge {
     idleThresholdMin: 1,
     keepHistoryDays: 365,
     showTray: true,
-    experimentalAi: false,
-  }
-  /** The harness is not a Tauri build, so the assistant is simply absent. */
-  const noAi: AiStatus = {
-    compiledIn: false,
-    enabled: false,
-    configured: false,
-    models: [],
-    error: null,
+    customCss: '',
   }
   const listeners: Record<string, ((...args: unknown[]) => void)[]> = {}
   const emit = (ch: string, ...args: unknown[]) => (listeners[ch] ?? []).forEach((f) => f(...args))
@@ -235,9 +203,9 @@ function createBrowserHarnessBridge(): Bridge {
     getWeekdayAverages: async () => ({ buckets: [] }),
     getHistoryPage: async () => ({ items: [], hasMore: false }),
     openDataFolder: () => undefined,
-    notesList: async () => [],
-    noteSave: async (n) => n,
-    noteDelete: async () => true,
+    pagesList: async () => [],
+    pageSave: async (p) => p,
+    pageDelete: async () => true,
     tasksList: async () => [],
     taskSave: async (t) => t,
     taskToggle: async () => null,
@@ -251,15 +219,7 @@ function createBrowserHarnessBridge(): Bridge {
     clipCapture: async () => null,
     tagIndex: async () => ({}),
     searchEverything: async () => [],
-    quickCapture: async (input) => ({ kind: 'note', title: input, id: '' }),
-    aiStatus: async () => noAi,
-    aiAsk: async () => ({
-      ok: false,
-      answer: null,
-      error: 'The experimental assistant is not available in the browser preview.',
-    }),
-    aiSaveSession: async () => noAi,
-    aiClearSession: async () => noAi,
+    quickCapture: async (input) => ({ kind: 'page', title: input, id: '' }),
     fileRoots: async () => [],
     filesRecent: async () => [],
     filesSearch: async () => [],
@@ -351,9 +311,9 @@ function createTauriBridge(): Bridge {
     getHistoryPage: (offset: number, limit: number) =>
       invoke('get_history_page', { offset, limit }) as Promise<Awaited<ReturnType<Bridge['getHistoryPage']>>>,
     openDataFolder: () => void invoke('open_data_folder'),
-    notesList: () => invoke('notes_list') as Promise<Awaited<ReturnType<Bridge['notesList']>>>,
-    noteSave: (note) => invoke('note_save', { note }) as Promise<Awaited<ReturnType<Bridge['noteSave']>>>,
-    noteDelete: (id) => invoke('note_delete', { id }) as Promise<boolean>,
+    pagesList: () => invoke('pages_list') as Promise<Awaited<ReturnType<Bridge['pagesList']>>>,
+    pageSave: (page) => invoke('page_save', { page }) as Promise<Awaited<ReturnType<Bridge['pageSave']>>>,
+    pageDelete: (id) => invoke('page_delete', { id }) as Promise<boolean>,
     tasksList: () => invoke('tasks_list') as Promise<Awaited<ReturnType<Bridge['tasksList']>>>,
     taskSave: (task) => invoke('task_save', { task }) as Promise<Awaited<ReturnType<Bridge['taskSave']>>>,
     taskToggle: (id) => invoke('task_toggle', { id }) as Promise<Awaited<ReturnType<Bridge['taskToggle']>>>,
@@ -370,16 +330,6 @@ function createTauriBridge(): Bridge {
       invoke('search_everything', { query }) as Promise<Awaited<ReturnType<Bridge['searchEverything']>>>,
     quickCapture: (input) =>
       invoke('quick_capture', { input }) as Promise<Awaited<ReturnType<Bridge['quickCapture']>>>,
-    // The ai_* commands only exist when the crate was built with the
-    // experimental-ai feature, so a rejected invoke is the normal "not in this
-    // build" answer rather than an error worth surfacing.
-    aiStatus: () => invoke('ai_status').then((s) => s as AiStatus).catch(() => null),
-    aiAsk: (question, model = null) =>
-      invoke('ai_ask', { question, model }) as Promise<AiAnswer>,
-    aiSaveSession: (cookie) =>
-      invoke('ai_save_session', { cookie }).then((s) => s as AiStatus).catch(() => null),
-    aiClearSession: () =>
-      invoke('ai_clear_session').then((s) => s as AiStatus).catch(() => null),
     fileRoots: () => invoke('file_roots') as Promise<Awaited<ReturnType<Bridge['fileRoots']>>>,
     filesRecent: (force = false) =>
       invoke('files_recent', { force }) as Promise<Awaited<ReturnType<Bridge['filesRecent']>>>,

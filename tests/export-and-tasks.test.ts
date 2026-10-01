@@ -71,11 +71,11 @@ describe('export JSON', () => {
 
 describe('new task button', () => {
   const tasks = read('src/pages/TasksPage.tsx')
-  const add = body(tasks, 'const add = async () => {', 'const toggle = async (id: string)')
+  const add = body(tasks, 'const add = async () => {', 'const allTags = useMemo')
 
   it('never fails silently', () => {
     expect(add).toMatch(/catch \(e\) \{/)
-    expect(add).toContain('setError(')
+    expect(add).toContain('setLocalError(')
     expect(tasks).toContain('role="alert"')
   })
 
@@ -88,14 +88,35 @@ describe('new task button', () => {
     expect(tasks).toMatch(/if \(e\.key !== 'Enter'\) return[\s\S]*?e\.preventDefault\(\)/)
   })
 
-  it('tells the user when a save worked but the list could not refresh', () => {
-    expect(add).toContain('if (!(await load()))')
-    expect(add).toContain('setError(')
+  it('surfaces a failed reload instead of showing an empty screen', () => {
+    // The list now comes from the shared store, so the equivalent guarantee is
+    // that the store reports its own load failure rather than silently
+    // resolving to an empty array.
+    const store = read('src/workspace/store.ts')
+    expect(store).toMatch(/const reload = useCallback[\s\S]*?setError\(/)
+    expect(tasks).toMatch(/error && !tasks/)
+    expect(add).toContain('setLocalError(')
   })
 
   it('surfaces toggle failures too', () => {
-    const toggle = body(tasks, 'const toggle = async (id: string)', 'const setPriority')
+    // The toggle moved into the shared workspace store, so that is where the
+    // failure handling has to live — otherwise one module's rollback would
+    // leave every other module showing a task as done when it is not.
+    const store = read('src/workspace/store.ts')
+    const toggle = body(store, 'const toggleTask = useCallback', 'const deleteTask = useCallback')
     expect(toggle).toMatch(/catch \(e\) \{/)
+    expect(toggle).toContain('upsert(cur ?? [], before)')
+  })
+
+  it('keeps the legacy task commands the bridge still calls', () => {
+    // The bridge method names did not change, so the registered command names
+    // must not either.
+    for (const command of ['task_save', 'tasks_list', 'task_toggle', 'task_delete', 'tasks_clear_done']) {
+      expect(new RegExp(`^\\s+${command},$`, 'm').test(lib), `${command} is not registered`).toBe(true)
+    }
+    expect(new RegExp('^\\s+pages_list,$', 'm').test(lib)).toBe(true)
+    expect(new RegExp('^\\s+page_save,$', 'm').test(lib)).toBe(true)
+    expect(new RegExp('^\\s+page_delete,$', 'm').test(lib)).toBe(true)
   })
 
   it('keeps the vault alive after one panicking thread', () => {
@@ -123,9 +144,7 @@ describe('the bridge still matches the renderer', () => {
     )
   })
 
-  it('still registers export_json and the task commands', () => {
-    for (const command of ['export_json', 'task_save', 'tasks_list', 'task_toggle']) {
-      expect(new RegExp(`^\\s+${command},$`, 'm').test(lib), `${command} is not registered`).toBe(true)
-    }
+  it('still registers export_json', () => {
+    expect(new RegExp(`^\\s+export_json,$`, 'm').test(lib)).toBe(true)
   })
 })

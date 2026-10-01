@@ -4,34 +4,73 @@ All notable changes to 1Boost are documented here. The latest release's
 section is injected into the GitHub Release body by CI
 (`scripts/release-notes.mjs`).
 
+## [Unreleased]
+
+### Changed
+
+- **1Boost is now a connected workspace.** Notes and Tasks were two unrelated
+  modules that happened to share a data folder; they are now one model.
+  - **Pages replace notes.** A page is a tree of blocks — headings,
+    paragraphs, bulleted and numbered lists, to-dos, quotes, callouts, code,
+    dividers and images — written in a block editor rather than a textarea.
+    Pages nest, so a page can hold sub-pages.
+  - **Tasks live in the same model.** A task carries a status, priority, due
+    date, tags, subtasks, an optional project page, an optional source page
+    and a list of tasks it is blocked by.
+  - **Everything points at everything.** A task references its project and the
+    page it was written on; a page can reference tasks and other pages. The
+    dashboard's task list, a page's task panel and the backlink list all walk
+    those same references, so moving between a task, its project and the page
+    it came from is one click.
+- **Pages.** Block editor with a slash menu and markdown shortcuts (`#`,
+  `-`, `1.`, `[]`, `>`, ```` ``` ````, `---`), drag-to-reorder, multi-block
+  selection with bulk move/nest/duplicate/delete, undo/redo, debounced
+  autosave with Ctrl+S to flush, page tree with breadcrumbs, favourites and
+  recents, page search, backlinks and a page-local task list.
+- **Tasks.** Status (to do / in progress / blocked / done), priority, due dates,
+  tags, subtasks, projects, blocked-by relations and recurrence (daily,
+  weekdays, weekly, monthly — completing a recurring task reschedules it
+  rather than closing it), in three views: list, board and calendar. Filter by
+  status, project and tag; sort by due date, priority, newest or title; quick
+  create with Enter, and `N` to jump to it from anywhere in the module.
+- **The dashboard is the home of 1Boost.** It leads with today's tasks and
+  recent work, keeps the time and activity summary it already had, and adds a
+  live system strip (CPU, memory, tightest drive) and a shortcut list.
+- **The interface is black, white and grayscale.** The user-selectable accent
+  colour is gone; emphasis is carried by the theme's own accent tokens, which
+  are also the supported customization surface.
+- **Custom CSS.** Settings has an optional stylesheet editor listing every
+  supported variable and component class. It is applied after the app's own
+  CSS in one dedicated element, and clears back to the default completely.
+
+### Removed
+
+- **The experimental AI assistant, entirely.** The Rust modules, the
+  `experimental-ai` cargo feature, its `sha1` dependency, the five `ai_*`
+  commands, the `experimentalAi` preference, the Assistant module and its
+  Settings section are all gone. Nothing is hidden behind a flag and no
+  replacement was added. Existing `settings.json` files that carry
+  `experimentalAi` still load: the field is simply ignored.
+
+### Migration
+
+- Notes are migrated to pages on first launch. Each note becomes a page and
+  its plain-text body is parsed into blocks using the editor's own markdown
+  vocabulary, so headings, lists, to-dos, quotes and fenced code survive the
+  upgrade. `notes.json` is left untouched on disk.
+- A note's `pinned` flag becomes the page's `favourite`.
+- Tasks written before the upgrade deserialize with empty project, page,
+  subtask and recurrence fields, and their old `done` boolean is folded into the
+  new `status`.
+- Deleting a page no longer loses the tasks written on it: they are kept and
+  simply stop claiming a page that no longer exists.
+
 ## [1.3.2] - 2026-10-01
 
-### Added
-
-- **An experimental AI assistant.** A new Assistant module asks Gemini questions
-  about your own recorded usage — how today went, when you are most productive,
-  how this week compares to the last. It lives entirely inside the existing
-  `1Boost.exe`: the request is built and sent by the Rust backend, there is no
-  sidecar service and no new dependency on the user's machine.
-  - **Off by default, behind two switches.** The whole feature is behind a
-    `experimental-ai` cargo feature that is compiled out entirely unless the
-    build asks for it, and behind a per-user pref that defaults to off. Turning
-    the pref off also deletes the stored session.
-  - **Your data is disclosed before it is sent.** Each question goes out with a
-    short, capped summary of usage totals — hours, percentages and application
-    display names. File names, paths and note contents are never included, and
-    the summary is described in Settings and again on the Assistant page.
-  - **You connect the session yourself.** The user pastes their own Gemini
-    cookie; 1Boost never reads a browser profile and never ships a credential.
-    The value is written only to the app's own data folder at runtime, is never
-    logged, and is never written to this repository.
-  - **It is not unlimited, and it says so.** Answers come from one signed-in
-    web session, so they are bound by that account's quota, and Google can
-    change or withdraw the front end at any time. Questions are sent as
-    temporary chats so they do not accumulate in Google account history.
-  - Labelled Experimental in the sidebar, the page header and Settings, with
-    the standing note that it may be changed, disabled or removed in any
-    release.
+Added and then withdrawn before the release was cut. The experimental AI
+assistant described below never shipped: it was removed during the workspace
+redesign documented under [Unreleased] and replaced by nothing. The release
+number is reused for the redesign.
 
 ## [1.3.1] - 2026-09-30
 

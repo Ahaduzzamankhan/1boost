@@ -7,9 +7,9 @@ import { bridge } from '../bridge'
  * Ctrl+Shift+Space — capture without leaving whatever you were doing.
  *
  * One input, routed by the first character:
- *   `buy milk #shopping`  → note
+ *   `buy milk #shopping`  → page
  *   `!call the dentist`   → task
- *   `>raw capture`        → note, explicit
+ *   `>raw capture`        → page, explicit
  * Tags are any `#word` tokens; everything else becomes the title.
  */
 export default function QuickCapture({
@@ -19,7 +19,7 @@ export default function QuickCapture({
 }: {
   open: boolean
   onClose: () => void
-  onCaptured: (kind: 'note' | 'task', id: string, title: string) => void
+  onCaptured: (kind: 'page' | 'task', id: string, title: string) => void
 }) {
   const [text, setText] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -37,7 +37,7 @@ export default function QuickCapture({
 
   if (!open) return null
 
-  const route = text.trim().startsWith('!') ? 'task' : 'note'
+  const route = text.trim().startsWith('!') ? 'task' : 'page'
 
   const submit = async () => {
     const value = text.trim()
@@ -66,10 +66,10 @@ export default function QuickCapture({
         <div className="capture-head">
           <span className="capture-route">
             {route === 'task' ? <ListChecks size={14} /> : <FileText size={14} />}
-            {route === 'task' ? 'Task' : 'Note'}
+            {route === 'task' ? 'Task' : 'Page'}
           </span>
           <span className="capture-hint">
-            <kbd>!</kbd> task · <kbd>&gt;</kbd> note · <kbd>#tag</kbd> tags
+            <kbd>!</kbd> task · <kbd>&gt;</kbd> page · <kbd>#tag</kbd> tags
           </span>
           <button className="btn btn-ghost" aria-label="Close" onClick={onClose}>
             <X size={16} />

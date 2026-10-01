@@ -27,37 +27,10 @@ impl Default for Theme {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Accent {
-    #[serde(rename = "blue")]
-    Blue,
-    #[serde(rename = "violet")]
-    Violet,
-    #[serde(rename = "teal")]
-    Teal,
-    #[serde(rename = "green")]
-    Green,
-    #[serde(rename = "amber")]
-    Amber,
-    #[serde(rename = "rose")]
-    Rose,
-    #[serde(rename = "sky")]
-    Sky,
-    #[serde(rename = "crimson")]
-    Crimson,
-}
-
-impl Default for Accent {
-    fn default() -> Self {
-        Accent::Blue
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Prefs {
     pub theme: Theme,
-    pub accent: Accent,
     pub transparency: f64,
     pub reduced_motion: bool,
     pub launch_at_login: bool,
@@ -66,17 +39,18 @@ pub struct Prefs {
     pub idle_threshold_min: i64,
     pub keep_history_days: i64,
     pub show_tray: bool,
-    /// User opt-in for the experimental AI assistant (1.3.2). Defaults to off,
-    /// and `serde(default)` keeps settings files written before it intact.
+    /// User-supplied CSS, injected into the renderer through a dedicated
+    /// style element. Optional in every sense: empty by default, clamped in
+    /// `sanitized()`, and applied after the app's own stylesheet so it can
+    /// override the documented variables without replacing them.
     #[serde(default)]
-    pub experimental_ai: bool,
+    pub custom_css: String,
 }
 
 impl Default for Prefs {
     fn default() -> Self {
         Prefs {
             theme: Theme::DarkGlass,
-            accent: Accent::Blue,
             transparency: 0.4,
             reduced_motion: false,
             launch_at_login: false,
@@ -85,7 +59,7 @@ impl Default for Prefs {
             idle_threshold_min: 1,
             keep_history_days: 365,
             show_tray: true,
-            experimental_ai: false,
+            custom_css: String::new(),
         }
     }
 }
@@ -388,6 +362,11 @@ pub struct LaunchState {
 // Prefs clamping (mirrors storage.ts sanitizePrefs)
 // ---------------------------------------------------------------------------
 
+/// Upper bound on the custom stylesheet. A customization layer is optional, so
+/// the cap exists to stop a pasted file from turning into a multi-megabyte
+/// string that is re-serialized into settings.json on every keystroke.
+pub const MAX_CUSTOM_CSS: usize = 64 * 1024;
+
 impl Prefs {
     pub fn sanitized(mut self) -> Self {
         self.transparency = self.transparency.clamp(0.0, 1.0);
@@ -396,6 +375,15 @@ impl Prefs {
         }
         self.idle_threshold_min = self.idle_threshold_min.clamp(1, 120);
         self.keep_history_days = self.keep_history_days.clamp(7, 3650);
+        if self.custom_css.len() > MAX_CUSTOM_CSS {
+            // Truncate on a char boundary: the renderer writes the value back
+            // into a style element, and a split UTF-8 sequence would not parse.
+            let mut end = MAX_CUSTOM_CSS;
+            while end > 0 && !self.custom_css.is_char_boundary(end) {
+                end -= 1;
+            }
+            self.custom_css.truncate(end);
+        }
         self
     }
 }

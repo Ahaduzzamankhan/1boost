@@ -105,7 +105,7 @@ function UpdatePrompt({ update }: { update: UpdateState | null }) {
             className="section-title"
             style={{ marginBottom: 0, display: 'flex', alignItems: 'center', gap: 8 }}
           >
-            <Rocket size={18} color="var(--accent)" /> Update ready
+            <Rocket size={18} /> Update ready
           </div>
           <button
             className="btn btn-ghost"
@@ -292,13 +292,10 @@ function Shell({
     if (def?.workspace) setWorkspace(def.workspace)
   }, [page])
 
-  const navItems = useMemo(
-    () => modulesIn(workspace, prefs.experimentalAi),
-    [workspace, prefs.experimentalAi],
-  )
+  const navItems = useMemo(() => modulesIn(workspace), [workspace])
 
   const go = useCallback(
-    (p: PageId, payload?: { noteId?: string; taskId?: string }) => {
+    (p: PageId, payload?: { pageId?: string; taskId?: string }) => {
       navigate(p)
       if (payload) setFocus(payload)
     },
@@ -379,9 +376,7 @@ function Shell({
         onClose={() => setCaptureOpen(false)}
         onCaptured={(kind, id) => {
           navigate(kind === 'task' ? 'tasks' : 'notes')
-          setFocus(
-            kind === 'task' ? { taskId: id } : { noteId: id },
-          )
+          setFocus(kind === 'task' ? { taskId: id } : { pageId: id })
         }}
       />
 

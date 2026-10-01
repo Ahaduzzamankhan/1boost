@@ -39,6 +39,10 @@ It records usage **locally**, turns raw activity into useful daily statistics, a
 | 🧩 **Applications** | Per-application usage and breakdowns |
 | ⚡ **Monitor** | CPU, RAM, GPU, disk and network activity |
 | 🌡️ **Hardware** | Temperatures when Windows exposes a real sensor |
+| 📝 **Pages** | Block editor, nested pages, backlinks, task blocks |
+| ✅ **Tasks** | Status, priority, projects, subtasks, list/board/calendar |
+| 🔗 **One workspace** | Tasks belong to projects and pages; the dashboard ties both to your time |
+| 🎨 **Custom CSS** | Optional, isolated, documented variables |
 | 🔄 **Updater** | Signed automatic updates with differential packages |
 | 💾 **Local-first** | No accounts, telemetry or cloud database |
 | 🦀 **Rust-powered** | Native monitoring and tracking layer |
@@ -57,14 +61,38 @@ It records usage **locally**, turns raw activity into useful daily statistics, a
 
 ## 🚀 Features
 
-### 📈 Dashboard
-- PC-on time
-- Active usage
-- Idle time
+### 🏠 Dashboard
+The home of 1Boost: today's tasks and recent pages first, then the time and
+activity picture.
+
+- Today's tasks, completable in place
+- Recent pages and notes
+- PC-on, active and idle time
 - Today's top applications
-- 7/30-day usage trends
-- Fullscreen focus tracking
-- Battery time estimate
+- 7/30-day and all-time usage trends
+- Fullscreen focus tracking and battery estimate
+- Live system strip (CPU, memory, tightest drive)
+- Keyboard shortcut reference
+
+### 📝 Pages
+A block editor rather than a textarea, over a tree of pages.
+
+- Blocks: headings, paragraphs, bulleted and numbered lists, to-dos, quotes,
+  callouts, code, dividers and images
+- Nested blocks and nested pages, with breadcrumbs
+- Slash menu and markdown shortcuts (`#`, `-`, `1.`, `[]`, `>`, ` ``` `, `---`)
+- Drag to reorder; multi-block select for move, nest, duplicate and delete
+- Undo/redo, and autosave with `Ctrl+S` to flush
+- Favourites, recents, search and backlinks
+- Task blocks and page blocks that reference the rest of the workspace
+
+### ✅ Tasks
+- Status (to do, in progress, blocked, done), priority and due dates
+- Tags, subtasks, projects, blocked-by relations
+- Recurrence: daily, weekdays, weekly or monthly
+- List, board and calendar views
+- Filter by status, project and tag; sort four ways
+- Quick create with `Enter`; press `N` to jump to it from anywhere
 
 ### 🧩 Application analytics
 - All-time per-app usage
@@ -76,15 +104,15 @@ It records usage **locally**, turns raw activity into useful daily statistics, a
 Real-time native monitoring for CPU, memory, GPU, disk, network, temperatures where available, storage and live graphs.
 
 ### 🎨 Customization
-- Dark Glass
-- White Glass
-- Solid Dark
-- Solid White
-- AMOLED
-- Multiple accent colors
-- Transparency control
-- Reduced motion
+Black, white and grayscale by default.
+
+- Five themes: Dark Glass, White Glass, Solid Dark, Solid White and AMOLED
+- Transparency control and reduced motion
 - Rounded desktop window
+- **Optional custom CSS** — every supported variable and component class is
+  listed in Settings. Your stylesheet is applied after the app's own, inside a
+  single isolated element, and clearing it restores the default completely.
+  Remote loads and anything executable are stripped.
 
 ### 🔄 Modern updater
 Signed Tauri updates, GitHub Releases integration, background downloads and differential NSIS packages.

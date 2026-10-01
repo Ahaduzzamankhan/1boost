@@ -13,7 +13,9 @@ import {
  * about how a module stores its list.
  */
 export interface FocusTarget {
-  noteId?: string
+  /** Page id to open in Pages. */
+  pageId?: string
+  /** Task id to highlight in Tasks. */
   taskId?: string
   /** Monotonic marker so re-selecting the same row still re-focuses it. */
   nonce: number

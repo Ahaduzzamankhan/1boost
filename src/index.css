@@ -33,11 +33,15 @@
   --text-body: 14px;
   --text-secondary: 12.5px;
 
-  /* Accent (overridden at runtime from user preference) */
-  --accent: #3b82f6;
-  --accent-strong: #2563eb;
-  --accent-soft: rgba(59, 130, 246, 0.16);
-  --accent-text: #ffffff;
+  /* Accent. Deliberately achromatic: 1Boost's palette is black, white and
+     grayscale, so these describe emphasis (a selected row, a focus ring, a
+     filled checkbox) rather than a brand colour. They are set per theme
+     below and deliberately NOT written from JS, so a user's custom CSS can
+     override them without a re-render. */
+  --accent: #f2f4f8;
+  --accent-strong: #ffffff;
+  --accent-soft: rgba(255, 255, 255, 0.12);
+  --accent-text: #0a0c10;
 
   /* Semantic tokens (set by theme rules below) */
   --bg: rgba(8, 10, 14, 0.72);
@@ -73,6 +77,11 @@
   --text-muted: rgba(255, 255, 255, 0.4);
   --shadow-card: 0 8px 24px rgba(0, 0, 0, 0.16);
   --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.28);
+  --accent: #f2f4f8;
+  --accent-strong: #ffffff;
+  --accent-soft: rgba(255, 255, 255, 0.12);
+  --accent-text: #0a0c10;
+
   --backdrop: rgba(6, 8, 12, 0.42);
   color-scheme: dark;
 }
@@ -89,6 +98,11 @@
   --text-muted: rgba(10, 12, 16, 0.4);
   --shadow-card: 0 8px 24px rgba(20, 30, 50, 0.1);
   --shadow-pop: 0 12px 32px rgba(20, 30, 50, 0.16);
+  --accent: #1a1d23;
+  --accent-strong: #000000;
+  --accent-soft: rgba(0, 0, 0, 0.08);
+  --accent-text: #ffffff;
+
   --backdrop: rgba(240, 243, 248, 0.42);
   color-scheme: light;
 }
@@ -105,6 +119,11 @@
   --text-muted: rgba(255, 255, 255, 0.42);
   --shadow-card: none;
   --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.4);
+  --accent: #f2f4f8;
+  --accent-strong: #ffffff;
+  --accent-soft: rgba(255, 255, 255, 0.12);
+  --accent-text: #0a0c10;
+
   --backdrop: transparent;
   --glass: 0;
   color-scheme: dark;
@@ -122,6 +141,11 @@
   --text-muted: rgba(12, 14, 18, 0.42);
   --shadow-card: 0 1px 2px rgba(16, 24, 40, 0.05);
   --shadow-pop: 0 12px 32px rgba(16, 24, 40, 0.14);
+  --accent: #1a1d23;
+  --accent-strong: #000000;
+  --accent-soft: rgba(0, 0, 0, 0.08);
+  --accent-text: #ffffff;
+
   --backdrop: transparent;
   --glass: 0;
   color-scheme: light;
@@ -139,6 +163,11 @@
   --text-muted: rgba(255, 255, 255, 0.42);
   --shadow-card: none;
   --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.6);
+  --accent: #f2f4f8;
+  --accent-strong: #ffffff;
+  --accent-soft: rgba(255, 255, 255, 0.12);
+  --accent-text: #0a0c10;
+
   --backdrop: transparent;
   --glass: 0;
   color-scheme: dark;
@@ -920,149 +949,6 @@ button:focus-visible,
   margin-top: 1px;
 }
 
-/* Inline result line under a setting row. Buttons that quietly did nothing
-   used to be the single most reported complaint about this app, so anything
-   a setting does now says so out loud. */
-.setting-note {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin: var(--space-2) 0 var(--space-3);
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border);
-  font-size: 12.5px;
-  color: var(--text-secondary);
-  animation: noteIn 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
-}
-
-.setting-note .grow {
-  flex: 1;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.setting-note.ok {
-  border-color: color-mix(in srgb, #22c55e 42%, transparent);
-  background: color-mix(in srgb, #22c55e 10%, transparent);
-  color: var(--text-primary);
-}
-
-.setting-note.bad {
-  border-color: color-mix(in srgb, #ef4444 45%, transparent);
-  background: color-mix(in srgb, #ef4444 10%, transparent);
-  color: var(--text-primary);
-}
-
-.setting-note .muted {
-  color: var(--text-muted);
-}
-
-@keyframes noteIn {
-  from {
-    opacity: 0;
-    background-color: var(--accent-soft);
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-.theme-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: var(--space-3);
-}
-
-.theme-card {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: var(--space-2);
-  text-align: left;
-  transition: border-color var(--transition-fast) var(--ease), transform var(--transition-fast) var(--ease);
-}
-
-.theme-card:hover {
-  border-color: var(--border-strong);
-}
-
-.theme-card.selected {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent);
-}
-
-.theme-preview {
-  height: 72px;
-  border-radius: var(--radius-sm);
-  margin-bottom: var(--space-2);
-  position: relative;
-  overflow: hidden;
-}
-
-.theme-preview .tp-bar {
-  position: absolute;
-  left: 8px;
-  top: 8px;
-  bottom: 8px;
-  width: 26px;
-  border-radius: 6px;
-}
-
-.theme-preview .tp-card {
-  position: absolute;
-  left: 42px;
-  right: 10px;
-  top: 8px;
-  height: 24px;
-  border-radius: 6px;
-}
-
-.theme-preview .tp-card2 {
-  position: absolute;
-  left: 42px;
-  right: 10px;
-  top: 38px;
-  bottom: 8px;
-  border-radius: 6px;
-}
-
-.theme-name {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.swatch-grid {
-  display: flex;
-  gap: var(--space-2);
-  flex-wrap: wrap;
-}
-
-.swatch {
-  width: 34px;
-  height: 34px;
-  border-radius: 10px;
-  border: 2px solid transparent;
-  display: grid;
-  place-items: center;
-  transition: transform var(--transition-fast) var(--ease);
-}
-
-.swatch:hover {
-  transform: scale(1.08);
-}
-
-.swatch.selected {
-  border-color: var(--text-primary);
-}
-
-.swatch span {
-  width: 20px;
-  height: 20px;
-  border-radius: 6px;
-}
 
 /* Empty & error states */
 .empty-state {
@@ -1389,16 +1275,10 @@ kbd {
    further down neutralise all of it when the user asks for less motion, so
    nothing in this section needs its own opt-out. */
 
-/* A soft accent wash behind the whole app, in the user's accent colour.
-   It sits in the app's own background rather than a pseudo-element: a
-   positioned overlay would paint on top of the content, and animating a
-   background position here would repaint the backdrop-filtered root on
-   every frame. */
-.app {
-  background-image:
-    radial-gradient(58vw 46vw at 8% -8%, var(--accent-soft), transparent 70%),
-    radial-gradient(48vw 40vw at 104% 112%, var(--accent-soft), transparent 68%);
-}
+/* The app surface stays flat. Two large radial washes used to sit behind
+   everything; on a grayscale palette they only added a visible blotch, and
+   animating the background meant repainting the backdrop-filtered root on
+   every frame. Depth comes from the surface tokens and the single shadow. */
 
 /* The tracking indicator breathes while it is live, and holds still when
    paused — so the tray dot, the sidebar dot and this one all read the same
@@ -1484,13 +1364,12 @@ kbd {
   }
 }
 
-/* A gradient on the page title, and an accent rule that draws itself under
-   each section heading. */
+/* Page titles are set plainly. The previous gradient ran from the text colour
+   into the accent colour, which read as a tint on a coloured accent and as a
+   grey smear on a grayscale one; hierarchy comes from weight and size instead,
+   which is also cheaper to render. */
 .page-title {
-  background: linear-gradient(96deg, var(--text-primary) 30%, var(--accent) 130%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
+  color: var(--text-primary);
 }
 
 .section-title {

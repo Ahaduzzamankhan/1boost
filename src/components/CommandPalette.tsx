@@ -17,7 +17,7 @@ type Row =
   | { type: 'hit'; id: string; label: string; hint: string; hit: SearchHit; icon: React.ReactNode }
 
 /**
- * Ctrl+K — the one place to go. It searches modules (jump), then notes,
+ * Ctrl+K — the one place to go. It searches modules (jump), then pages,
  * tasks and tracked apps (universal search). Results are ranked locally for
  * modules and by the Rust scorer for content, so typing feels instant.
  */
@@ -28,7 +28,7 @@ export default function CommandPalette({
 }: {
   open: boolean
   onClose: () => void
-  onNavigate: (page: PageId, payload?: { noteId?: string; taskId?: string }) => void
+  onNavigate: (page: PageId, payload?: { pageId?: string; taskId?: string }) => void
 }) {
   const [query, setQuery] = useState('')
   const [cursor, setCursor] = useState(0)
@@ -104,7 +104,7 @@ export default function CommandPalette({
         hint: h.subtitle,
         hit: h,
         icon:
-          h.kind === 'note' ? (
+          h.kind === 'page' ? (
             <FileText size={15} />
           ) : h.kind === 'task' ? (
             <ListChecks size={15} />
@@ -136,8 +136,8 @@ export default function CommandPalette({
       if (!row) return
       if (row.type === 'module') {
         onNavigate(row.id)
-      } else if (row.hit.kind === 'note') {
-        onNavigate('notes', { noteId: row.hit.id })
+      } else if (row.hit.kind === 'page') {
+        onNavigate('notes', { pageId: row.hit.id })
       } else if (row.hit.kind === 'task') {
         onNavigate('tasks', { taskId: row.hit.id })
       } else {
@@ -181,7 +181,7 @@ export default function CommandPalette({
           <input
             ref={inputRef}
             value={query}
-            placeholder="Search modules, notes, tasks and apps…"
+            placeholder="Search pages, tasks, modules and apps…"
             onChange={(e) => setQuery(e.target.value)}
             spellCheck={false}
             autoComplete="off"
@@ -197,7 +197,7 @@ export default function CommandPalette({
                 </>
               ) : (
                 <>
-                  Type to search. <b>!</b> captures a task, <b>&gt;</b> a note — from quick
+                  Type to search. <b>!</b> captures a task, <b>&gt;</b> a page — from quick
                   capture (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Space</kbd>).
                 </>
               )}

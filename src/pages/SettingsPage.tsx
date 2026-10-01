@@ -15,11 +15,12 @@ import {
   RefreshCw,
   RotateCcw,
   CheckCircle2,
-  FlaskConical,
+  Brush,
 } from 'lucide-react'
-import type { AccentId, AiStatus, LaunchState, Prefs, ThemeId, UpdateState } from '../../shared/types'
-import { bridge, ACCENT_HEX } from '../bridge'
+import type { LaunchState, Prefs, ThemeId, UpdateState } from '../../shared/types'
+import { bridge } from '../bridge'
 import { Slider, Toggle } from '../components/ui'
+import { CUSTOM_CSS_SELECTORS, CUSTOM_CSS_VARIABLES, sanitizeCss } from '../customCss'
 
 const THEMES: { id: ThemeId; name: string; preview: { bg: string; bar: string; card: string; glass: boolean } }[] = [
   {
@@ -49,17 +50,6 @@ const THEMES: { id: ThemeId; name: string; preview: { bg: string; bar: string; c
   },
 ]
 
-const ACCENTS: { id: AccentId; name: string }[] = [
-  { id: 'blue', name: 'Blue' },
-  { id: 'violet', name: 'Violet' },
-  { id: 'teal', name: 'Teal' },
-  { id: 'green', name: 'Green' },
-  { id: 'amber', name: 'Amber' },
-  { id: 'rose', name: 'Rose' },
-  { id: 'sky', name: 'Sky' },
-  { id: 'crimson', name: 'Crimson' },
-]
-
 export default function SettingsPage({
   prefs,
   setPref,
@@ -87,24 +77,8 @@ export default function SettingsPage({
   const [checking, setChecking] = useState(false)
   const [rollingBack, setRollingBack] = useState(false)
   const [rollbackNote, setRollbackNote] = useState<string | null>(null)
-  // The experimental assistant. `null` means the build has no ai_* commands at
-  // all (compiled without the cargo feature), which is different from "off".
-  const [ai, setAi] = useState<AiStatus | null>(null)
-  const [cookie, setCookie] = useState('')
-  const [aiNote, setAiNote] = useState<{ ok: boolean; text: string } | null>(null)
-  const [savingCookie, setSavingCookie] = useState(false)
-
-  const refreshAi = useCallback(async () => {
-    try {
-      setAi(await bridge.aiStatus())
-    } catch {
-      setAi(null)
-    }
-  }, [])
-
-  useEffect(() => {
-    void refreshAi()
-  }, [refreshAi, prefs.experimentalAi])
+  const [customCss, setCustomCss] = useState(prefs.customCss)
+  const [cssSaved, setCssSaved] = useState(false)
 
   const refreshLaunch = useCallback(async () => {
     try {
@@ -207,27 +181,6 @@ export default function SettingsPage({
                     {prefs.theme === t.id ? <Check size={14} color="var(--accent)" /> : null}
                     {t.name}
                   </div>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="setting-row">
-            <div className="setting-info">
-              <div className="setting-title">Accent color</div>
-              <div className="setting-desc">Used for highlights, charts and controls.</div>
-            </div>
-            <div className="swatch-grid">
-              {ACCENTS.map((a) => (
-                <button
-                  key={a.id}
-                  className={`swatch${prefs.accent === a.id ? ' selected' : ''}`}
-                  style={{ background: 'var(--surface)' }}
-                  onClick={() => void setPref('accent', a.id)}
-                  aria-label={`Accent ${a.name}`}
-                  aria-pressed={prefs.accent === a.id}
-                >
-                  <span style={{ background: ACCENT_HEX[a.id] }} />
                 </button>
               ))}
             </div>
@@ -536,132 +489,112 @@ export default function SettingsPage({
         </div>
       </section>
 
-      {/* Experimental */}
+      {/* Custom CSS */}
       <section className="settings-section">
         <div className="section-title" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <FlaskConical size={18} /> Experimental AI
+          <Brush size={18} /> Custom CSS
         </div>
         <div className="card">
-          <div className="setting-row">
-            <div className="setting-info">
-              <div className="setting-title">Experimental assistant</div>
+          <div className="setting-row" style={{ display: 'block' }}>
+            <div className="setting-info" style={{ marginBottom: 12 }}>
+              <div className="setting-title">Your own stylesheet</div>
               <div className="setting-desc">
-                Ask questions about your recorded usage. Answers come from Gemini through a web
-                session you connect yourself, using your own Google account's quota — this is{' '}
-                <b>not unlimited</b> and Google can change or withdraw it at any time. This feature
-                is experimental: it may be changed, disabled or removed in any release.
+                Optional. 1Boost is designed to look right with nothing here — this is for making it
+                yours. Your CSS is applied after the app's own stylesheet, so a variable or selector
+                overrides it without needing <code>!important</code>. It runs in an isolated element:
+                clearing the box restores the default UI completely.
               </div>
             </div>
-            <Toggle
-              checked={prefs.experimentalAi}
-              onChange={(v) => void setPref('experimentalAi', v)}
-              label="Experimental assistant"
+            <textarea
+              className="tool-input css-editor selectable"
+              value={customCss}
+              spellCheck={false}
+              placeholder={':root {\n  --radius-md: 4px;\n  --font: "Georgia", serif;\n}\n\n.card { border-radius: 2px; }'}
+              onChange={(e) => {
+                setCustomCss(e.target.value)
+                setCssSaved(false)
+              }}
+              aria-label="Custom CSS"
             />
+            <div className="css-actions">
+              <button
+                className="btn btn-primary"
+                onClick={async () => {
+                  await setPref('customCss', customCss)
+                  setCssSaved(true)
+                }}
+              >
+                <Check size={14} /> Apply
+              </button>
+              <button
+                className="btn btn-secondary"
+                onClick={async () => {
+                  setCustomCss('')
+                  await setPref('customCss', '')
+                  setCssSaved(true)
+                }}
+                disabled={!customCss}
+              >
+                <RotateCcw size={14} /> Reset
+              </button>
+              {cssSaved ? <span className="setting-desc">Applied.</span> : null}
+              {customCss && sanitizeCss(customCss) !== customCss ? (
+                <span className="setting-note warn" role="note">
+                  <AlertCircle size={14} />
+                  <span className="grow">
+                    Some lines were removed: remote loads (<code>@import</code>, external{' '}
+                    <code>url()</code>) and rules that could execute cannot be used here.
+                  </span>
+                </span>
+              ) : null}
+            </div>
           </div>
 
-          {!ai?.compiledIn ? (
-            <div className="setting-note" role="status">
-              <AlertCircle size={14} />
-              <span className="grow">
-                Not compiled into this build — 1Boost has to be built with the experimental-ai
-                feature for the assistant to exist. Turning the switch on now has no effect.
-              </span>
+          <div className="setting-row" style={{ display: 'block' }}>
+            <div className="setting-info" style={{ marginBottom: 8 }}>
+              <div className="setting-title">Supported variables</div>
+              <div className="setting-desc">
+                These are read by every module. Setting one on <code>:root</code> changes it
+                everywhere.
+              </div>
             </div>
-          ) : null}
-
-          {ai?.compiledIn && prefs.experimentalAi ? (
-            <>
-              <div className="setting-note" role="note">
-                <AlertCircle size={14} />
-                <span className="grow">
-                  <b>What leaves this machine.</b> Each question is sent to Gemini together with a
-                  short, capped summary of your usage totals (hours, percentages and application
-                  names). File names, paths and note contents are never included. Chats are sent as
-                  temporary so they do not accumulate in your Google history. You can switch the
-                  assistant off at any time, which also deletes the stored session.
-                </span>
-              </div>
-
-              <div className="setting-row">
-                <div className="setting-info">
-                  <div className="setting-title">Gemini session</div>
-                  <div className="setting-desc">
-                    {ai.configured
-                      ? 'A session is connected. Paste a new cookie to replace it.'
-                      : 'Paste the Cookie header from a signed-in gemini.google.com tab. 1Boost never reads your browser profile, and nothing you paste is written to this project.'}
+            <div className="css-ref">
+              {['Surface', 'Text', 'Accent', 'Shape', 'Spacing', 'Type', 'Depth', 'Motion'].map((group) => (
+                <div key={group} className="css-ref-group">
+                  <div className="css-ref-heading">{group}</div>
+                  <div className="css-ref-items">
+                    {CUSTOM_CSS_VARIABLES.filter((v) => v.group === group).map((v) => (
+                      <code key={v.name}>{v.name}</code>
+                    ))}
                   </div>
                 </div>
-                {ai.configured ? (
-                  <button
-                    className="btn btn-danger"
-                    onClick={async () => {
-                      const next = await bridge.aiClearSession()
-                      setAi(next)
-                      setAiNote({ ok: true, text: 'Session deleted from this machine.' })
-                    }}
-                  >
-                    <Trash2 size={15} /> Disconnect
-                  </button>
-                ) : null}
-              </div>
+              ))}
+            </div>
+          </div>
 
-              <div className="setting-row" style={{ display: 'block' }}>
-                <div className="setting-info">
-                  <div className="setting-title">Session cookie</div>
-                  <div className="setting-desc">
-                    Value is stored only in 1Boost's own data folder at runtime. It is never logged,
-                    never included in an export, and never committed.
-                  </div>
-                </div>
-                <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-                  <input
-                    className="tool-input"
-                    type="password"
-                    autoComplete="off"
-                    spellCheck={false}
-                    placeholder="__Secure-1PSID=…; __Secure-1PSIDTS=…; SAPISID=…"
-                    value={cookie}
-                    onChange={(e) => setCookie(e.target.value)}
-                  />
-                  <button
-                    className="btn btn-primary"
-                    disabled={savingCookie || !cookie.trim()}
-                    onClick={async () => {
-                      setSavingCookie(true)
-                      setAiNote(null)
-                      try {
-                        const next = await bridge.aiSaveSession(cookie.trim())
-                        setAi(next)
-                        setCookie('')
-                        setAiNote(
-                          next?.configured
-                            ? { ok: true, text: 'Session saved. The value is not shown again.' }
-                            : {
-                                ok: false,
-                                text:
-                                  next?.error ??
-                                  'That value does not look like a Gemini session cookie.',
-                              },
-                        )
-                      } finally {
-                        setSavingCookie(false)
-                      }
-                    }}
-                  >
-                    {savingCookie ? 'Saving…' : 'Save session'}
-                  </button>
-                </div>
-                {aiNote ? (
-                  <div className={`setting-note${aiNote.ok ? ' ok' : ' bad'}`} role="status">
-                    {aiNote.ok ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />}
-                    <span className="grow">{aiNote.text}</span>
-                  </div>
-                ) : null}
+          <div className="setting-row" style={{ display: 'block' }}>
+            <div className="setting-info" style={{ marginBottom: 8 }}>
+              <div className="setting-title">Component classes</div>
+              <div className="setting-desc">
+                Stable hooks you can restyle. Class names are internal and may change between
+                versions; variables are the supported surface.
               </div>
-            </>
-          ) : null}
+            </div>
+            <div className="css-ref">
+              <div className="css-ref-group">
+                <div className="css-ref-items">
+                  {CUSTOM_CSS_SELECTORS.map((s) => (
+                    <code key={s.selector} title={s.what}>
+                      {s.selector}
+                    </code>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
+
 
       {/* Accessibility */}
       <section className="settings-section">

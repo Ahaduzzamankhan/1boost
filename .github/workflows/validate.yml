@@ -42,16 +42,6 @@ jobs:
         working-directory: src-tauri
         run: cargo test --lib --release
 
-      # The experimental assistant is behind a cargo feature, so the default
-      # check above never compiles it. Build and test it explicitly or it rots.
-      - name: Check Tauri backend with the experimental assistant
-        working-directory: src-tauri
-        run: cargo check --release --features experimental-ai
-
-      - name: Test the experimental assistant
-        working-directory: src-tauri
-        run: cargo test --lib --release --features experimental-ai
-
   ts:
     runs-on: ubuntu-latest
     steps:

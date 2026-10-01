@@ -1,8 +1,6 @@
 // Shared types for 1Boost (mirrors native FFI structs and storage schema).
 
 export type ThemeId = 'dark-glass' | 'white-glass' | 'solid-dark' | 'solid-white' | 'amoled'
-export type AccentId =
-  | 'blue' | 'violet' | 'teal' | 'green' | 'amber' | 'rose' | 'sky' | 'crimson'
 
 export interface AppIdentity {
   /** Lowercased file name without extension, e.g. "chrome". */
@@ -103,7 +101,6 @@ export interface MonitorSample {
 
 export interface Prefs {
   theme: ThemeId
-  accent: AccentId
   transparency: number
   reducedMotion: boolean
   launchAtLogin: boolean
@@ -112,34 +109,12 @@ export interface Prefs {
   idleThresholdMin: number
   keepHistoryDays: number
   showTray: boolean
-  /** User opt-in for the experimental AI assistant. Off by default. */
-  experimentalAi: boolean
-}
-
-/**
- * State of the experimental assistant. `compiledIn` is false in builds made
- * without the cargo feature, which is how the UI knows to hide the module.
- */
-export interface AiStatus {
-  compiledIn: boolean
-  /** The user's own switch, from `prefs.experimentalAi`. */
-  enabled: boolean
-  /** A usable session has been supplied. */
-  configured: boolean
-  models: AiModelOption[]
-  /** Why the assistant cannot be used yet, when that is the case. */
-  error: string | null
-}
-
-export interface AiModelOption {
-  id: string
-  label: string
-}
-
-export interface AiAnswer {
-  ok: boolean
-  answer: string | null
-  error: string | null
+  /**
+   * User-supplied CSS, applied after the app's own stylesheet through a
+   * dedicated style element. Optional: empty means the default UI, which is
+   * designed to look right on its own.
+   */
+  customCss: string
 }
 
 /** Windows login-item state as probed from the main process. */
@@ -380,9 +355,9 @@ export interface Bridge {
   getHistoryPage: (offset: number, limit: number) => Promise<HistoryPage>
   openDataFolder: () => void
   // Productivity vault ---------------------------------------------------
-  notesList: () => Promise<Note[]>
-  noteSave: (note: Note) => Promise<Note>
-  noteDelete: (id: string) => Promise<boolean>
+  pagesList: () => Promise<Page[]>
+  pageSave: (page: Page) => Promise<Page>
+  pageDelete: (id: string) => Promise<boolean>
   tasksList: () => Promise<Task[]>
   taskSave: (task: Task) => Promise<Task>
   taskToggle: (id: string) => Promise<Task | null>
@@ -397,13 +372,6 @@ export interface Bridge {
   tagIndex: () => Promise<Record<string, number>>
   searchEverything: (query: string) => Promise<SearchHit[]>
   quickCapture: (input: string) => Promise<CaptureResult>
-  // Experimental assistant --------------------------------------------
-  /** Absent (rejects) in builds compiled without the experimental-ai feature. */
-  aiStatus: () => Promise<AiStatus | null>
-  aiAsk: (question: string, model?: string | null) => Promise<AiAnswer>
-  /** Stores the user's own cookie. The value is never echoed back. */
-  aiSaveSession: (cookie: string) => Promise<AiStatus | null>
-  aiClearSession: () => Promise<AiStatus | null>
   // File tools ----------------------------------------------------------
   fileRoots: () => Promise<RootFolder[]>
   filesRecent: (force?: boolean) => Promise<FileEntry[]>
@@ -411,26 +379,84 @@ export interface Bridge {
   openFile: (path: string, reveal?: boolean) => Promise<void>
 }
 
-// ---- Productivity vault (notes / tasks / clipboard) ------------------------
+// ---- Productivity vault (pages / tasks / clipboard) ------------------------
+//
+// One connected workspace. A page is a tree of blocks; a task belongs to an
+// optional project page and an optional source page, nests through `parentId`,
+// and can be blocked by other tasks. Pages reference tasks and other pages
+// through `task` and `page` blocks, which is what backlinks walk.
 
-export interface Note {
+/** Every kind the editor understands. Mirrors `vault::BLOCK_KINDS`. */
+export type BlockKind =
+  | 'paragraph'
+  | 'heading1'
+  | 'heading2'
+  | 'heading3'
+  | 'bulletedListItem'
+  | 'numberedListItem'
+  | 'todo'
+  | 'quote'
+  | 'callout'
+  | 'code'
+  | 'divider'
+  | 'image'
+  | 'table'
+  | 'task'
+  | 'page'
+
+export interface Block {
+  id: string
+  kind: BlockKind
+  text: string
+  /** Todo state; always false for other kinds. */
+  checked: boolean
+  /** Target id for `task` and `page` blocks. */
+  meta: string
+  /**
+   * Kind-specific extra: code language, image URL, callout tone, or — for
+   * tables — rows joined by newlines with cells separated by tabs.
+   */
+  extra: string
+}
+
+export interface Page {
   id: string
   title: string
-  body: string
+  /** Emoji; cosmetic. */
+  icon: string
+  /** Empty means top level. */
+  parentId: string
+  blocks: Block[]
   tags: string[]
-  pinned: boolean
+  favorite: boolean
+  archived: boolean
   createdMs: number
   updatedMs: number
 }
 
+export type TaskStatus = 'todo' | 'doing' | 'blocked' | 'done'
+export type Recurrence = '' | 'daily' | 'weekdays' | 'weekly' | 'monthly'
+
 export interface Task {
   id: string
   title: string
+  /** Mirrors `status === 'done'`; kept for the legacy storage shape. */
   done: boolean
-  dueMs?: number | null
+  status: TaskStatus
   /** 0 = none, 1 = low, 2 = medium, 3 = high. */
   priority: number
+  dueMs?: number | null
   tags: string[]
+  /** Page this task belongs to as part of a project. */
+  projectId: string
+  /** Page the task was written on. */
+  pageId: string
+  /** Parent task id, for subtasks. */
+  parentId: string
+  /** Task ids this one is blocked by. */
+  blockedBy: string[]
+  recurrence: Recurrence
+  order: number
   createdMs: number
   updatedMs: number
   completedMs?: number | null
@@ -459,16 +485,17 @@ export interface RootFolder {
 }
 
 export interface SearchHit {
-  kind: 'note' | 'task' | 'app'
+  kind: 'page' | 'task' | 'app'
   id: string
   title: string
   subtitle: string
   score: number
+  /** A page id for a page hit, or a module id. */
   target: string
 }
 
 export interface CaptureResult {
-  kind: 'note' | 'task'
+  kind: 'page' | 'task'
   title: string
   id: string
 }
@@ -487,7 +514,6 @@ export type PageId =
   | 'clipboard'
   | 'calendar'
   | 'utilities'
-  | 'assistant'
   | 'devtools'
   | 'files'
 

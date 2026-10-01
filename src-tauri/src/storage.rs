@@ -205,18 +205,6 @@ pub fn sanitize_prefs(p: serde_json::Value) -> Prefs {
                     _ => Theme::DarkGlass,
                 };
             }
-            if let Some(a) = p.get("accent").and_then(|a| a.as_str()) {
-                out.accent = match a {
-                    "violet" => Accent::Violet,
-                    "teal" => Accent::Teal,
-                    "green" => Accent::Green,
-                    "amber" => Accent::Amber,
-                    "rose" => Accent::Rose,
-                    "sky" => Accent::Sky,
-                    "crimson" => Accent::Crimson,
-                    _ => Accent::Blue,
-                };
-            }
             if let Some(t) = p.get("transparency").and_then(|t| t.as_f64()) {
                 out.transparency = t.clamp(0.0, 1.0);
             }
@@ -246,11 +234,11 @@ pub fn sanitize_prefs(p: serde_json::Value) -> Prefs {
             if let Some(b) = p.get("showTray").and_then(|b| b.as_bool()) {
                 out.show_tray = b;
             }
-            if let Some(b) = p.get("experimentalAi").and_then(|b| b.as_bool()) {
-                out.experimental_ai = b;
+            if let Some(c) = p.get("customCss").and_then(|c| c.as_str()) {
+                out.custom_css = c.to_string();
             }
             let _ = &mut prefs;
-            out
+            out.sanitized()
         }
         Err(_) => Prefs::default(),
     }

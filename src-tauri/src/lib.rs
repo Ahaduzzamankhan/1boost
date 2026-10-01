@@ -23,15 +23,6 @@ mod updater;
 mod util;
 mod vault;
 
-// The experimental AI assistant. Compiled out entirely unless the
-// `experimental-ai` cargo feature is on, so it can be removed from a build
-// without leaving a seam. On top of that, the user's own pref has to be on
-// before any of it is reachable — see `ai_commands::user_enabled`.
-#[cfg(feature = "experimental-ai")]
-mod assistant;
-#[cfg(feature = "experimental-ai")]
-mod assistant_context;
-
 use model::*;
 use monitor::MonitorPayload;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -444,20 +435,6 @@ fn apply_pref_value(
                 other => return Err(format!("unknown theme: {other}")),
             };
         }
-        "accent" => {
-            let s = value.as_str().ok_or("accent must be a string")?;
-            prefs.accent = match s {
-                "violet" => Accent::Violet,
-                "teal" => Accent::Teal,
-                "green" => Accent::Green,
-                "amber" => Accent::Amber,
-                "rose" => Accent::Rose,
-                "sky" => Accent::Sky,
-                "crimson" => Accent::Crimson,
-                "blue" => Accent::Blue,
-                other => return Err(format!("unknown accent: {other}")),
-            };
-        }
         "transparency" => {
             prefs.transparency = value.as_f64().ok_or("transparency must be a number")?;
         }
@@ -493,15 +470,8 @@ fn apply_pref_value(
                 hide_tray(&app);
             }
         }
-        // Turning the experimental assistant off also forgets the session it
-        // was using, so disabling it really does stop the data flow.
-        "experimentalAi" => {
-            let on = value.as_bool().ok_or("bool required")?;
-            prefs.experimental_ai = on;
-            if !on {
-                #[cfg(feature = "experimental-ai")]
-                crate::assistant::Session::clear();
-            }
+        "customCss" => {
+            prefs.custom_css = value.as_str().ok_or("customCss must be a string")?.to_string();
         }
         other => return Err(format!("Unknown setting: {other}")),
     }
@@ -747,18 +717,19 @@ fn open_file(app: AppHandle, path: String, reveal: bool) -> Result<(), String> {
 // Productivity vault ---------------------------------------------------------
 
 #[tauri::command]
-fn notes_list(app: AppHandle) -> Vec<vault::Note> {
-    app.state::<AppState>().vault.notes()
+fn pages_list(app: AppHandle) -> Vec<vault::Page> {
+    app.state::<AppState>().vault.pages()
 }
 
 #[tauri::command]
-fn note_save(app: AppHandle, note: vault::Note) -> vault::Note {
-    app.state::<AppState>().vault.save_note(note)
+fn page_save(app: AppHandle, page: vault::Page) -> vault::Page {
+    app.state::<AppState>().vault.save_page(page)
 }
 
+/// Deletes a page and everything nested under it.
 #[tauri::command]
-fn note_delete(app: AppHandle, id: String) -> bool {
-    app.state::<AppState>().vault.delete_note(&id)
+fn page_delete(app: AppHandle, id: String) -> bool {
+    app.state::<AppState>().vault.delete_page(&id)
 }
 
 #[tauri::command]
@@ -827,10 +798,10 @@ fn clip_capture(app: AppHandle) -> Option<vault::Clip> {
 #[tauri::command]
 fn tag_index(app: AppHandle) -> std::collections::BTreeMap<String, usize> {
     let v = &app.state::<AppState>().vault;
-    vault::tag_index(&v.notes(), &v.tasks())
+    vault::tag_index(&v.pages(), &v.tasks())
 }
 
-/// Universal search across notes, tasks and tracked apps.
+/// Universal search across pages, tasks and tracked apps.
 #[tauri::command]
 fn search_everything(app: AppHandle, query: String) -> Vec<vault::SearchHit> {
     let st = app.state::<AppState>();
@@ -860,7 +831,7 @@ fn quick_capture(app: AppHandle, input: String) -> Result<CaptureResult, String>
     }
     let (forced, rest) = match text.chars().next() {
         Some('!') => (Some("task"), text[1..].trim()),
-        Some('>') => (Some("note"), text[1..].trim()),
+        Some('>') => (Some("page"), text[1..].trim()),
         _ => (None, text),
     };
     // "#tag words" -> tags, "content" -> body.
@@ -881,14 +852,14 @@ fn quick_capture(app: AppHandle, input: String) -> Result<CaptureResult, String>
     }
     let title: String = content.chars().take(72).collect();
 
-    let kind = forced.unwrap_or("note");
+    let kind = forced.unwrap_or("page");
     let v = &app.state::<AppState>().vault;
     let result = if kind == "task" {
         let t = v.save_task(vault::Task { title: content, tags, ..Default::default() });
         CaptureResult { kind: "task".into(), title: t.title, id: t.id }
     } else {
-        let n = v.save_note(vault::Note { title, body: String::new(), tags, ..Default::default() });
-        CaptureResult { kind: "note".into(), title: n.title, id: n.id }
+        let p = v.save_page(vault::Page { title, blocks: Vec::new(), tags, ..Default::default() });
+        CaptureResult { kind: "page".into(), title: p.title, id: p.id }
     };
     Ok(result)
 }
@@ -1070,9 +1041,9 @@ pub fn run() {
             monitor_unsubscribe,
             navigate,
             open_app_detail,
-            notes_list,
-            note_save,
-            note_delete,
+            pages_list,
+            page_save,
+            page_delete,
             tasks_list,
             task_save,
             task_toggle,
@@ -1097,16 +1068,6 @@ pub fn run() {
             check_for_updates,
             install_update,
             rollback_update,
-            #[cfg(feature = "experimental-ai")]
-            ai_status,
-            #[cfg(feature = "experimental-ai")]
-            ai_ask,
-            #[cfg(feature = "experimental-ai")]
-            ai_save_session,
-            #[cfg(feature = "experimental-ai")]
-            ai_clear_session,
-            #[cfg(feature = "experimental-ai")]
-            ai_models,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -1195,162 +1156,4 @@ pub fn run() {
                 }
             }
         });
-}
-
-// ---------------------------------------------------------------------------
-// Experimental AI assistant
-// ---------------------------------------------------------------------------
-//
-// Everything below is compiled only with `--features experimental-ai`, and is
-// additionally refused at runtime unless the user has turned the pref on.
-// Two switches on purpose: the cargo feature removes the code from a build,
-// the pref removes it from a user's app.
-
-// The commands live at the crate root, like every other command in this file.
-// `generate_handler!` derives the name macro's path from where a command is
-// declared, so a command buried in a submodule does not resolve; keeping them
-// flat here is what makes the cfg gating below work at all.
-
-#[cfg(feature = "experimental-ai")]
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AiStatus {
-    /// True when the cargo feature is compiled in.
-    pub compiled_in: bool,
-    /// True when the user has switched it on.
-    pub enabled: bool,
-    /// True when a session has been supplied and looks usable.
-    pub configured: bool,
-    pub models: Vec<ModelOption>,
-    pub error: Option<String>,
-}
-
-#[cfg(feature = "experimental-ai")]
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ModelOption {
-    pub id: String,
-    pub label: String,
-}
-
-#[cfg(feature = "experimental-ai")]
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AiAnswer {
-    pub ok: bool,
-    pub answer: Option<String>,
-    pub error: Option<String>,
-}
-
-#[cfg(feature = "experimental-ai")]
-fn ai_models_list() -> Vec<ModelOption> {
-    crate::assistant::MODELS
-        .iter()
-        .map(|m| ModelOption { id: m.id.to_string(), label: m.label.to_string() })
-        .collect()
-}
-
-/// The user's own pref, not the compile-time flag.
-#[cfg(feature = "experimental-ai")]
-fn ai_user_enabled(app: &AppHandle) -> bool {
-    app.state::<AppState>().tracker.prefs().experimental_ai
-}
-
-#[cfg(feature = "experimental-ai")]
-#[tauri::command]
-fn ai_status(app: AppHandle) -> AiStatus {
-    use crate::assistant::{AssistantError, Session};
-    let enabled = ai_user_enabled(&app);
-    let configured = Session::load().map(|s| s.looks_configured()).unwrap_or(false);
-    let error = if !configured { Some(AssistantError::NoSession.to_string()) } else { None };
-    AiStatus { compiled_in: true, enabled, configured, models: ai_models_list(), error }
-}
-
-#[cfg(feature = "experimental-ai")]
-#[tauri::command]
-async fn ai_ask(app: AppHandle, question: String, model: Option<String>) -> AiAnswer {
-    use crate::assistant::{self, AssistantError, Session};
-    if !ai_user_enabled(&app) {
-        return AiAnswer { ok: false, answer: None, error: Some(AssistantError::Disabled.to_string()) };
-    }
-    let question = question.trim();
-    if question.is_empty() {
-        return AiAnswer { ok: false, answer: None, error: Some("Ask a question first.".into()) };
-    }
-    let session = match Session::load() {
-        Ok(s) => s,
-        Err(e) => return AiAnswer { ok: false, answer: None, error: Some(e.to_string()) },
-    };
-    let spec = model
-        .as_deref()
-        .and_then(assistant::resolve_model)
-        .unwrap_or_else(assistant::default_model);
-
-    // The context is read here, under the same lock the dashboard uses.
-    let context = {
-        let st = app.state::<AppState>();
-        let storage = st.tracker.storage.lock().unwrap_or_else(|e| e.into_inner());
-        crate::assistant_context::build_context(&storage.data, now_ms())
-    };
-    // Temporary by default: questions about a user's own activity should not
-    // accumulate in the user's Google account history.
-    let prompt = crate::assistant_context::compose_prompt(&context, question, spec.label);
-
-    match assistant::ask(&session, &prompt, spec, true).await {
-        Ok(answer) => AiAnswer { ok: true, answer: Some(answer), error: None },
-        Err(e) => {
-            // Log the kind of failure, never the question or the session.
-            log::warn!("[1boost] assistant request failed: {e}");
-            AiAnswer { ok: false, answer: None, error: Some(e.to_string()) }
-        }
-    }
-}
-
-/// Stores the user's own session cookie. The value is never logged, never
-/// sent anywhere but gemini.google.com, and written only under the app's own
-/// data directory.
-#[cfg(feature = "experimental-ai")]
-#[tauri::command]
-fn ai_save_session(app: AppHandle, cookie: String) -> AiStatus {
-    use crate::assistant::{self, AssistantError, Session};
-    let mut session = Session { cookie, ..Default::default() };
-    // Derived, never asked for separately: the cookie the user pasted is the
-    // only thing they had to supply.
-    session.sapisid = assistant::sapisid_from_cookie(&session.cookie).unwrap_or_default();
-    if session.save().is_err() {
-        return AiStatus {
-            compiled_in: true,
-            enabled: ai_user_enabled(&app),
-            configured: false,
-            models: ai_models_list(),
-            error: Some(AssistantError::Write.to_string()),
-        };
-    }
-    // Deliberately reports only whether it is usable, never the value.
-    AiStatus {
-        compiled_in: true,
-        enabled: ai_user_enabled(&app),
-        configured: session.looks_configured(),
-        models: ai_models_list(),
-        error: None,
-    }
-}
-
-#[cfg(feature = "experimental-ai")]
-#[tauri::command]
-fn ai_clear_session(app: AppHandle) -> AiStatus {
-    crate::assistant::Session::clear();
-    AiStatus {
-        compiled_in: true,
-        enabled: ai_user_enabled(&app),
-        configured: false,
-        models: ai_models_list(),
-        error: None,
-    }
-}
-
-#[cfg(feature = "experimental-ai")]
-#[tauri::command]
-fn ai_models() -> Vec<ModelOption> {
-    ai_models_list()
 }

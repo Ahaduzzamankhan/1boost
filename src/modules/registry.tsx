@@ -11,7 +11,6 @@ import {
   LayoutDashboard,
   ChartNoAxesCombined,
   NotebookPen,
-  Sparkles,
   Settings as SettingsIcon,
   ListChecks,
   Wrench,
@@ -44,10 +43,9 @@ const CalendarPage = lazy(() => import('../pages/CalendarPage'))
 const UtilitiesPage = lazy(() => import('../pages/UtilitiesPage'))
 const DevToolsPage = lazy(() => import('../pages/DevToolsPage'))
 const FilesPage = lazy(() => import('../pages/FilesPage'))
-const AssistantPage = lazy(() => import('../pages/AssistantPage'))
 
 /** Workspace groups, so the sidebar stays scannable as modules grow. */
-export type WorkspaceId = 'insight' | 'capture' | 'utilities'
+export type WorkspaceId = 'insight' | 'workspace' | 'utilities'
 
 export interface Workspace {
   id: WorkspaceId
@@ -66,17 +64,11 @@ export interface ModuleDef {
   component: LazyExoticComponent<ComponentType<any>>
   /** Settings lives in the sidebar footer, not in a workspace list. */
   footer?: boolean
-  /**
-   * Experimental modules stay out of the sidebar until their pref is on, so
-   * the rail only ever shows things that are actually usable. They remain
-   * reachable from the command palette, which explains how to switch them on.
-   */
-  experimentalAi?: boolean
 }
 
 export const WORKSPACES: Workspace[] = [
   { id: 'insight', label: 'Insight', blurb: 'Where your time goes' },
-  { id: 'capture', label: 'Capture', blurb: 'Notes, tasks and the clipboard' },
+  { id: 'workspace', label: 'Workspace', blurb: 'Pages, tasks and the clipboard' },
   { id: 'utilities', label: 'Utilities', blurb: 'Everyday and developer tools' },
 ]
 
@@ -128,17 +120,17 @@ export const MODULES: ModuleDef[] = [
   },
   {
     id: 'notes',
-    label: 'Notes',
-    keywords: ['notes', 'note', 'write', 'scratchpad', 'markdown', 'text'],
-    workspace: 'capture',
+    label: 'Pages',
+    keywords: ['pages', 'page', 'notes', 'note', 'write', 'blocks', 'docs', 'wiki', 'markdown'],
+    workspace: 'workspace',
     icon: <NotebookPen size={18} />,
     component: NotesPage,
   },
   {
     id: 'tasks',
     label: 'Tasks',
-    keywords: ['tasks', 'todo', 'to-do', 'checklist', 'reminders'],
-    workspace: 'capture',
+    keywords: ['tasks', 'todo', 'to-do', 'checklist', 'reminders', 'board', 'kanban', 'calendar'],
+    workspace: 'workspace',
     icon: <ListChecks size={18} />,
     component: TasksPage,
   },
@@ -146,7 +138,7 @@ export const MODULES: ModuleDef[] = [
     id: 'clipboard',
     label: 'Clipboard',
     keywords: ['clipboard', 'copy', 'paste', 'snippets', 'history'],
-    workspace: 'capture',
+    workspace: 'workspace',
     icon: <ClipboardList size={18} />,
     component: ClipboardPage,
   },
@@ -154,7 +146,7 @@ export const MODULES: ModuleDef[] = [
     id: 'calendar',
     label: 'Calendar',
     keywords: ['calendar', 'agenda', 'schedule', 'month', 'week', 'events'],
-    workspace: 'capture',
+    workspace: 'workspace',
     icon: <CalendarDays size={18} />,
     component: CalendarPage,
   },
@@ -183,18 +175,9 @@ export const MODULES: ModuleDef[] = [
     component: FilesPage,
   },
   {
-    id: 'assistant',
-    label: 'Assistant',
-    keywords: ['assistant', 'ai', 'ask', 'gemini', 'experimental', 'chat'],
-    workspace: 'utilities',
-    icon: <Sparkles size={18} />,
-    component: AssistantPage,
-    experimentalAi: true,
-  },
-  {
     id: 'settings',
     label: 'Settings',
-    keywords: ['settings', 'preferences', 'theme', 'startup', 'tray', 'about', 'system'],
+    keywords: ['settings', 'preferences', 'theme', 'custom css', 'style', 'startup', 'tray', 'about', 'system'],
     // Settings is a footer entry: it belongs to the shell, not to a group.
     // The old "System" workspace existed only to hold it and rendered as an
     // empty sidebar heading, so its functionality lives here instead.
@@ -211,10 +194,8 @@ export function moduleById(id: PageId): ModuleDef | undefined {
 }
 
 /** Modules shown in a workspace; the footer item is excluded. */
-export function modulesIn(workspace: WorkspaceId, experimentalAiEnabled = false): ModuleDef[] {
-  return MODULES.filter(
-    (m) => m.workspace === workspace && !m.footer && (!m.experimentalAi || experimentalAiEnabled),
-  )
+export function modulesIn(workspace: WorkspaceId): ModuleDef[] {
+  return MODULES.filter((m) => m.workspace === workspace && !m.footer)
 }
 
 export function moduleLabel(id: PageId): string {
