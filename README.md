@@ -49,7 +49,7 @@ It records usage **locally**, turns raw activity into useful daily statistics, a
 
 <div align="center">
 
-<img src="https://opengraph.githubassets.com/1/Ahaduzzamankhan/1boost" alt="1Boost GitHub preview" width="900">
+<img src="https://raw.githubusercontent.com/Ahaduzzamankhan/1boost/main/icons/Screenshot%202026-10-01%20125910.png" alt="1Boost GitHub preview" width="900">
 
 </div>
 
