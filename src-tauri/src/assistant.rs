@@ -653,54 +653,63 @@ mod tests {
         assert!(request_url(&account_prefix(Some("1"))).contains("/u/1/"));
     }
 
+    /// One `wrb.fr` frame. Built with `serde_json` rather than by pasting the
+    /// payload into a string literal: the payload is itself JSON full of
+    /// quotes, and interpolating it by hand produces a frame that does not
+    /// parse — which looks exactly like "the parser found no answer".
+    fn frame(inner: &serde_json::Value) -> String {
+        let payload = serde_json::to_string(inner).unwrap();
+        let frame = serde_json::json!([["wrb.fr", null, payload]]);
+        frame.to_string()
+    }
+
     #[test]
     fn reads_an_answer_out_of_a_front_end_stream() {
-        // inner[4][*][1][*][0], the shape the front end actually sends.
+        // inner[4][*][1][*][0], the shape the front end actually sends. Two
+        // chunks, because streaming repeats the sentence with more of it and
+        // the finished one is the longer of the two.
         let inner = serde_json::json!([
             null, null, "0",
             null,
-            [[null, [["Hello", null, null], [" there", null, null]]]]
+            [[null, [["Hello", null, null], ["Hello there", null, null]]]]
         ]);
-        let line = format!(
-            ")]}}'\n[[\"wrb.fr\",null,\"{}\",null,null,null,\"generic\"]]",
-            serde_json::to_string(&inner).unwrap()
-        );
-        let answer = parse_answer(&line).expect("should parse");
-        assert!(answer.contains("Hello"));
-        assert!(answer.contains("there"));
+        let raw = format!(")]}}'\n{}", frame(&inner));
+        assert_eq!(parse_answer(&raw).expect("should parse"), "Hello there");
     }
 
     #[test]
     fn a_short_answer_is_not_dropped_by_a_size_heuristic() {
         // "You were on for 8h." is a complete, correct answer. An earlier
         // minimum-line-length guard threw it away and returned EmptyAnswer.
-        let inner =
-            serde_json::json!([null, null, "0", null, [[null, [["You were on for 8h.", null, null]]]]]);
-        let line = format!(
-            ")]}}'\n[[\"wrb.fr\",null,\"{}\"]]",
-            serde_json::to_string(&inner).unwrap()
-        );
-        assert_eq!(parse_answer(&line).unwrap(), "You were on for 8h.");
+        let inner = serde_json::json!([
+            null, null, "0", null,
+            [[null, [["You were on for 8h.", null, null]]]]
+        ]);
+        assert_eq!(parse_answer(&frame(&inner)).unwrap(), "You were on for 8h.");
     }
 
     #[test]
     fn a_streamed_answer_settles_on_the_longest_chunk() {
-        // Each line repeats the sentence with more of it, so the last short
-        // chunk must not win.
-        let inner =
-            serde_json::json!([null, null, "0", null, [[null, [["The quick brown fox", null, null]]]]]);
-        let long = format!(
-            "[[\"wrb.fr\",null,\"{}\"]]",
-            serde_json::to_string(&inner).unwrap()
-        );
-        let partial_inner =
-            serde_json::json!([null, null, "0", null, [[null, [["The quick", null, null]]]]]);
-        let partial = format!(
-            "[[\"wrb.fr\",null,\"{}\"]]",
-            serde_json::to_string(&partial_inner).unwrap()
-        );
-        let answer = parse_answer(&format!("{}\n{}\n", partial, long)).unwrap();
+        // Each line repeats the sentence with more of it, so the short chunk
+        // that arrives first must not win.
+        let long = frame(&serde_json::json!([
+            null, null, "0", null,
+            [[null, [["The quick brown fox", null, null]]]]
+        ]));
+        let partial = frame(&serde_json::json!([
+            null, null, "0", null,
+            [[null, [["The quick", null, null]]]]
+        ]));
+        let answer = parse_answer(&format!("{partial}\n{long}\n")).unwrap();
         assert_eq!(answer, "The quick brown fox");
+    }
+
+    #[test]
+    fn chunks_arriving_as_bare_strings_are_read_too() {
+        // The tuple form and the bare form have both been seen; neither may
+        // come back empty.
+        let bare = serde_json::json!([null, null, "0", null, [[null, ["Just a string."]]]]);
+        assert_eq!(parse_answer(&frame(&bare)).unwrap(), "Just a string.");
     }
 
     #[test]
