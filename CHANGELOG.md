@@ -4,7 +4,7 @@ All notable changes to 1Boost are documented here. The latest release's
 section is injected into the GitHub Release body by CI
 (`scripts/release-notes.mjs`).
 
-## [Unreleased]
+## [1.3.2] - 2026-10-01
 
 ### Added
 
