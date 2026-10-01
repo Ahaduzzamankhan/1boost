@@ -554,6 +554,7 @@ async fn export_json(app: AppHandle) -> ExportResult {
     // plugin's blocking picker requires.
     let chosen = app
         .dialog()
+        .file()
         .add_filter("JSON", &["json"])
         .set_file_name(&name)
         .set_directory(default_export_dir())

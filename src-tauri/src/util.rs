@@ -88,7 +88,6 @@ pub fn shift_day_key(key: &str, days: i64) -> Option<String> {
 // yesterday's day key, and the day would silently split in two. The clock read
 // is cheap, so it is refreshed on a timer instead of once per process.
 
-use std::sync::Mutex;
 use std::time::Instant;
 
 /// How long a cached offset is trusted. Comfortably under the shortest DST

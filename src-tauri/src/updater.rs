@@ -25,6 +25,7 @@ use crate::payload;
 use serde::Serialize;
 use std::io::Read;
 use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_updater::UpdaterExt;
@@ -258,7 +259,21 @@ static PENDING: Mutex<Option<PendingUpdate>> = Mutex::new(None);
 /// Set while a check/download is running. The 5-minute tick, the startup
 /// check and a manual "Check now" from Settings can otherwise overlap and
 /// start two downloads of the same release.
-static IN_FLIGHT: Mutex<bool> = Mutex::new(false);
+///
+/// An atomic rather than a `Mutex<bool>`: holding a `MutexGuard` across an
+/// await makes the whole command future non-`Send`, which Tauri rejects.
+static IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
+/// Claims the single check slot. False means a check is already running.
+fn claim_check_slot() -> bool {
+    IN_FLIGHT
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+}
+
+fn release_check_slot() {
+    IN_FLIGHT.store(false, Ordering::Release);
+}
 
 /// Epoch ms before which no new check is attempted, set after a failure so an
 /// offline machine retries on a backoff instead of every five minutes forever.
@@ -365,14 +380,11 @@ fn is_newer(candidate: &str, current: &str) -> bool {
 
 pub async fn check_updates(app: &AppHandle) -> UpdateStatePayload {
     // A manual "Check now" from Settings must not race the background tick.
-    let mut in_flight = IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner());
-    if *in_flight {
+    if !claim_check_slot() {
         return state_payload("checking", None, None, None, None, None, None);
     }
-    *in_flight = true;
-    drop(in_flight);
     let result = do_check(app).await;
-    *IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner()) = false;
+    release_check_slot();
     result
 }
 
@@ -544,26 +556,24 @@ pub fn init_background(app: AppHandle) {
         loop {
             let now = crate::util::now_ms();
             let due = now >= backoff_until_ms();
-            if due && !install_started() {
-                let mut in_flight = IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner());
-                if !*in_flight {
-                    *in_flight = true;
-                    drop(in_flight);
-                    let h = app.clone();
-                    tauri::async_runtime::spawn(async move {
-                        let state = do_check(&h).await;
-                        // Every terminal outcome resets the backoff, so a
-                        // recovered network is picked up on the next tick.
-                        if state.status == "error" {
-                            note_failure();
-                        } else {
-                            note_success();
-                        }
-                        *IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner()) = false;
-                    });
-                }
+            if due && !install_started() && claim_check_slot() {
+                let h = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let state = do_check(&h).await;
+                    // Every terminal outcome resets the backoff, so a
+                    // recovered network is picked up on the next tick.
+                    if state.status == "error" {
+                        note_failure();
+                    } else {
+                        note_success();
+                    }
+                    release_check_slot();
+                });
             } else if !due {
-                log::debug!("[1boost] update check backing off until {backoff_until_ms}", backoff_until_ms = backoff_until_ms());
+                log::debug!(
+                    "[1boost] update check backing off for another {}s",
+                    (backoff_until_ms().saturating_sub(now)) / 1000
+                );
             }
 
             // A staged update waits for the user — until they are idle.
