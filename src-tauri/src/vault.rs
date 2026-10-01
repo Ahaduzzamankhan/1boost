@@ -379,7 +379,11 @@ impl Task {
         }
         // A task blocked by something that no longer exists would sit in
         // "blocked" forever, so a self-reference and empty ids are dropped.
-        self.blocked_by.retain(|id| !id.is_empty() && id != &self.id);
+        // Duplicates go too: the same blocker twice says nothing and would
+        // render twice in the UI.
+        let mut seen = BTreeSet::new();
+        self.blocked_by
+            .retain(|id| !id.is_empty() && id != &self.id && seen.insert(id.clone()));
     }
 
     /// Next due date for a recurring task, given when it was completed.
@@ -1099,14 +1103,16 @@ impl Vault {
         if task.status == "done" {
             task.status = "todo".into();
             task.completed_ms = None;
-            // Completing a recurring task moves its due date instead of
-            // closing it forever, which is the whole point of recurring.
-            if let Some(next) = task.next_due() {
-                task.due_ms = Some(next);
-            }
         } else {
             task.status = "done".into();
             task.completed_ms = Some(now);
+            // Completing a recurring task moves its due date instead of
+            // closing it forever, which is the whole point of recurring. It
+            // happens on completion, not on reopening: the reopened task is
+            // already the next occurrence.
+            if let Some(next) = task.next_due() {
+                task.due_ms = Some(next);
+            }
         }
         task.done = task.status == "done";
         task.updated_ms = now;
@@ -1602,7 +1608,7 @@ mod tests {
         let root = v.save_page(Page { title: "Root".into(), ..Default::default() });
         let child = v.save_page(Page { title: "Child".into(), parent_id: root.id.clone(), ..Default::default() });
         // Move the root under its own child: refused, and the old parent kept.
-        let saved = v.save_page(Page { title: "Root".into(), parent_id: child.id.clone(), ..Default::default() });
+        let saved = v.save_page(Page { id: root.id.clone(), title: "Root".into(), parent_id: child.id.clone(), ..Default::default() });
         assert_eq!(saved.parent_id, "");
         assert_eq!(v.pages().iter().find(|p| p.id == root.id).unwrap().parent_id, "");
     }
