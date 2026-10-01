@@ -517,8 +517,10 @@ mod tests {
     #[test]
     fn an_empty_session_is_not_configured() {
         assert!(!Session::default().looks_configured());
-        assert!(!Session { cookie: "  ".into(), sapisid: "x".into() }.looks_configured());
-        assert!(!Session { cookie: "a=b".into(), sapisid: " ".into() }.looks_configured());
+        assert!(!Session { cookie: "  ".into(), sapisid: "x".into(), ..Default::default() }
+            .looks_configured());
+        assert!(!Session { cookie: "a=b".into(), sapisid: " ".into(), ..Default::default() }
+            .looks_configured());
     }
 
     #[test]
@@ -545,8 +547,8 @@ mod tests {
     #[test]
     fn the_body_puts_the_prompt_and_model_where_the_front_end_expects() {
         let body = build_body("hello", &MODELS[0], false, None).unwrap();
-        let outer: serde_json::Value =
-            serde_json::from_str(query_value(&body, "f.req")).expect("f.req must be valid JSON");
+        let outer: serde_json::Value = serde_json::from_str(&query_value(&body, "f.req"))
+            .expect("f.req must be valid JSON");
         let inner: serde_json::Value =
             serde_json::from_str(outer[1].as_str().unwrap()).expect("inner must be valid JSON");
 
@@ -554,7 +556,11 @@ mod tests {
         assert_eq!(inner[79].as_u64(), Some(1), "flash is mode 1");
         assert_eq!(inner[17][0][0].as_u64(), Some(4), "flash does not think");
         assert_eq!(inner[41][0].as_u64(), Some(2), "chats are kept by default");
-        assert_eq!(inner.len(), 102, "the front end sends a fixed-width array");
+        assert_eq!(
+            inner.as_array().map(Vec::len),
+            Some(102),
+            "the front end sends a fixed-width array"
+        );
     }
 
     #[test]
@@ -634,7 +640,7 @@ mod tests {
             [[["Hello", null, null], [" there", null, null]]]
         ]);
         let line = format!(
-            ")]}'\n[[\"wrb.fr\",null,\"{}\",null,null,null,\"generic\"]]",
+            ")]}}'\n[[\"wrb.fr\",null,\"{}\",null,null,null,\"generic\"]]",
             serde_json::to_string(&inner).unwrap()
         );
         let answer = parse_answer(&line).expect("should parse");
